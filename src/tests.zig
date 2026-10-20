@@ -8,6 +8,8 @@ const groups = @import("groups.zig");
 const worktree = @import("worktree.zig");
 const apps = @import("apps.zig");
 const run = @import("run.zig");
+const fda = @import("fda.zig");
+const objc = nanoui.objc;
 const App = @import("app.zig").App;
 const view = @import("view.zig").view;
 
@@ -398,6 +400,78 @@ test "bytes, durations and dates read as Finder shows them" {
     try std.testing.expectEqualStrings("2 years ago", procs.ago(&b, now, now - 800 * 86400));
 }
 
+test "Full Disk Access is read from whether the TCC database opens" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try std.testing.expect(!fda.granted(t.path()));
+    try t.sh("mkdir -p 'Library/Application Support/com.apple.TCC' && printf x > 'Library/Application Support/com.apple.TCC/TCC.db'", .{});
+    try std.testing.expect(fda.granted(t.path()));
+    try t.sh("chmod 000 'Library/Application Support/com.apple.TCC/TCC.db'", .{});
+    if (std.c.getuid() != 0) try std.testing.expect(!fda.granted(t.path()));
+    const home = std.mem.span(std.c.getenv("HOME").?);
+    var p: [1024]u8 = undefined;
+    const db = try std.fmt.bufPrint(&p, "{s}/Library/Application Support/com.apple.TCC/TCC.db", .{home});
+    const readable = try run.capture(gpa, &.{ "/bin/test", "-r", db });
+    defer readable.deinit(gpa);
+    try std.testing.expectEqual(readable.code == 0, fda.granted(home));
+}
+
+test "the guide sits under System Settings, or low in the middle, inside the screen" {
+    const screen: objc.CGRect = .{ .origin = .{ .x = 0, .y = 25 }, .size = .{ .width = 1440, .height = 875 } };
+    const under = fda.anchor(.{ .origin = .{ .x = 400, .y = 300 }, .size = .{ .width = 700, .height = 500 } }, screen);
+    try std.testing.expectEqual(@as(f64, 400 + 350 - 190), under.origin.x);
+    try std.testing.expectEqual(@as(f64, 300 - 110 + 20), under.origin.y);
+    const alone = fda.anchor(null, screen);
+    try std.testing.expectEqual(@as(f64, 720 - 190), alone.origin.x);
+    try std.testing.expectEqual(@as(f64, 25 + 80), alone.origin.y);
+    const edge = fda.anchor(.{ .origin = .{ .x = 1300, .y = 0 }, .size = .{ .width = 300, .height = 60 } }, screen);
+    try std.testing.expectEqual(@as(f64, 1440 - 380 - 12), edge.origin.x);
+    try std.testing.expectEqual(@as(f64, 25 + 8), edge.origin.y);
+}
+
+test "the drag card hands over the app's file URL and allows a copy" {
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    _ = objc.msg(objc.Object, objc.class("NSApplication"), "sharedApplication", .{});
+    const item = fda.draggingItem("/Applications/Safari.app");
+    defer objc.release(item);
+    const writer = objc.msg(objc.Object, item, "item", .{});
+    try std.testing.expect(objc.msg(objc.BOOL, writer, "isKindOfClass:", .{objc.class("NSURL")}));
+    try std.testing.expect(objc.msg(objc.BOOL, writer, "isFileURL", .{}));
+    try std.testing.expectEqualStrings("/Applications/Safari.app", objc.fromNSString(objc.msg(?objc.Object, writer, "path", .{})));
+
+    var g: fda.Guide = .{ .home = "/nonexistent", .on_granted = undefined };
+    g.build();
+    defer g.dismiss();
+    const panel = g.panel.?;
+    try std.testing.expect(!objc.msg(objc.BOOL, panel, "isVisible", .{}));
+    try std.testing.expect(!objc.msg(objc.BOOL, panel, "hidesOnDeactivate", .{}));
+    try std.testing.expectEqualStrings("Drag nanokeep into the Full Disk Access list", objc.fromNSString(objc.msg(?objc.Object, g.title.?, "stringValue", .{})));
+    const card = g.card.?;
+    const mask = objc.msg(objc.NSUInteger, card, "draggingSession:sourceOperationMaskForDraggingContext:", .{ @as(?objc.Object, null), @as(objc.NSInteger, 0) });
+    try std.testing.expect(mask & 1 != 0);
+    const f = objc.msg(objc.CGRect, card, "frame", .{});
+    const hit = objc.msg(?objc.Object, card, "hitTest:", .{objc.CGPoint{ .x = f.origin.x + 5, .y = f.origin.y + 5 }});
+    try std.testing.expectEqual(@as(?objc.Object, card), hit);
+    const miss = objc.msg(?objc.Object, card, "hitTest:", .{objc.CGPoint{ .x = f.origin.x - 5, .y = f.origin.y }});
+    try std.testing.expectEqual(@as(?objc.Object, null), miss);
+    try std.testing.expect(g.item.len > 0);
+    if (std.c.getenv("NANOKEEP_SHOT_GUIDE")) |out| {
+        const content = objc.msg(objc.Object, panel, "contentView", .{});
+        const bounds = objc.msg(objc.CGRect, content, "bounds", .{});
+        const rep = objc.msg(objc.Object, content, "bitmapImageRepForCachingDisplayInRect:", .{bounds});
+        objc.msg(void, content, "cacheDisplayInRect:toBitmapImageRep:", .{ bounds, rep });
+        const png = objc.msg(objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) });
+        try std.testing.expect(objc.msg(objc.BOOL, png, "writeToFile:atomically:", .{ objc.nsString(std.mem.span(out)), objc.YES }));
+    }
+}
+
+var access_asked: usize = 0;
+
+fn recordAccess(_: *App) void {
+    access_asked += 1;
+}
+
 const plist =
     \\<?xml version="1.0" encoding="UTF-8"?>
     \\<plist version="1.0"><dict>
@@ -419,6 +493,8 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     defer a.deinit();
     a.cleaner.trash_fn = recordTrash;
     a.trash_app = recordTrash;
+    a.access_fn = recordAccess;
+    try t.sh("mkdir Downloads && chmod 000 Downloads", .{});
     a.cleaner.sync = true;
     a.inventory.sync = true;
     a.cleaner.scan();
@@ -464,6 +540,12 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     tester.settle(1);
     try std.testing.expect(tester.hasText("com.vendor.big"));
     try shot(&tester, "NANOKEEP_SHOT");
+    try std.testing.expectEqual(@as(usize, 0), access_asked);
+    tester.resize(1100, 1400);
+    tester.settle(1);
+    try tester.clickText("Allow Full Disk Access");
+    tester.settle(1);
+    try std.testing.expectEqual(@as(usize, 1), access_asked);
     try tester.clickText(cleanLabel(&a));
     tester.settle(1);
     try std.testing.expect(a.confirm_clean);

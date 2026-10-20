@@ -4,6 +4,7 @@ const procs = @import("procs.zig");
 const groups = @import("groups.zig");
 const cleaner = @import("cleaner.zig");
 const apps = @import("apps.zig");
+const fda = @import("fda.zig");
 
 extern "c" fn time(t: ?*i64) i64;
 
@@ -45,6 +46,8 @@ pub const App = struct {
     clock: ?*const fn () f64 = null,
     send: *const fn (c_int, c_int) callconv(.c) c_int = procs.sendKill,
     trash_app: cleaner.TrashFn = trashPath,
+    guide: ?fda.Guide = null,
+    access_fn: *const fn (*App) void = beginGuide,
 
     pub fn init(gpa: std.mem.Allocator, home: [:0]const u8, tmpdir: []const u8, app_dirs: []const []const u8) App {
         return .{
@@ -63,6 +66,7 @@ pub const App = struct {
     }
 
     pub fn deinit(a: *App) void {
+        if (a.guide) |*g| g.deinit();
         a.app_rows.deinit(a.gpa);
         a.expanded_groups.deinit(a.gpa);
         a.table.deinit();
@@ -206,6 +210,22 @@ pub const App = struct {
             a.toaster.push(.{ .status = .success, .title = std.fmt.bufPrint(&msg, "{s} {s}", .{ if (a.force) "Force quit" else "Asked to quit", name }) catch "Quit" });
         }
         a.selected = null;
+    }
+
+    pub fn requestAccess(a: *App) void {
+        a.access_fn(a);
+    }
+
+    fn beginGuide(a: *App) void {
+        if (a.guide == null) a.guide = .{ .home = a.sampler.home, .on_granted = .{ .ctx = a, .func = accessGranted } };
+        a.guide.?.begin();
+    }
+
+    fn accessGranted(ctx: *anyopaque) void {
+        const a: *App = @ptrCast(@alignCast(ctx));
+        a.toaster.push(.{ .status = .success, .title = "Full Disk Access is on", .message = "Looking through Installers and the Trash now." });
+        a.cleaner.scan();
+        if (a.window) |w| w.redraw();
     }
 
     pub fn selectedApp(a: *App) ?*apps.AppInfo {

@@ -11,7 +11,6 @@ const App = @import("app.zig").App;
 const child_rows = 8;
 const map_cols = 64;
 const map_rows = 12;
-const full_disk_access = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 const w_size = 90;
 const w_files = 90;
@@ -143,7 +142,7 @@ fn category(c: *ui.Context, a: *App, cat: *cleaner.Category, i: usize, now: i64)
             ui.text(c, spec.desc, .{ .size = 11.5, .color = th.muted });
         }
         if (cat.found.denied and size == 0) {
-            if (ui.button(c, "Allow Full Disk Access", .{ .size = 11.5, .icon = "lock.shield" }).clicked) _ = nanoui.shell.openUrl(full_disk_access);
+            if (ui.button(c, "Allow Full Disk Access", .{ .size = 11.5, .icon = "lock.shield" }).clicked) a.requestAccess();
         } else if (scanning) {
             const s = table.cell(c, w_size + w_files + w_modified, true);
             defer s.end();
