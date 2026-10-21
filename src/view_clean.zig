@@ -73,7 +73,7 @@ fn hero(c: *ui.Context, a: *App) void {
     const th = c.theme;
     const cl = &a.cleaner;
     const state = heroOf(cl);
-    const box = ui.div(c).column().wFull().p(22).gap(18).rounded(16).bg(th.surface);
+    const box = ui.div(c).column().wFull().p(22).gap(18).rounded(card.radius).bg(th.surface).shadow(card.lift);
     defer box.end();
     {
         const r = ui.div(c).row().wFull().gap(16).itemsCenter();

@@ -727,6 +727,8 @@ test "every page draws from this Mac's samples" {
     const Want = struct { page: @import("app.zig").Page, text: []const u8 };
     const pages = [_]Want{
         .{ .page = .overview, .text = "Memory by Type" },
+        .{ .page = .processes, .text = "Force Quit" },
+        .{ .page = .apps, .text = "Apps" },
         .{ .page = .cpu, .text = "Processor Load" },
         .{ .page = .memory, .text = "Swap" },
         .{ .page = .gpu, .text = "Engines" },
