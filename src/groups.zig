@@ -19,6 +19,7 @@ pub const Group = struct {
     threads: u32 = 0,
     disk: f32 = 0,
     time_ns: u64 = 0,
+    energy: f32 = 0,
     known: bool = false,
 };
 
@@ -101,6 +102,7 @@ pub const Table = struct {
             g.threads += p.threads;
             g.disk += p.disk_rate;
             g.time_ns += p.cpu_time_ns;
+            g.energy += p.energy;
             g.known = g.known or p.known;
             if (p.pid < g.pid) g.pid = p.pid;
         }

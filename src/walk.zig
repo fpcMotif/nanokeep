@@ -148,6 +148,8 @@ pub const Pool = struct {
     out: []Size,
     next: std.atomic.Value(usize) = .init(0),
     cancel: std.atomic.Value(bool) = .init(false),
+    stop: ?*const std.atomic.Value(bool) = null,
+    measured: ?*std.atomic.Value(u64) = null,
 
     pub fn run(pool: *Pool) void {
         const cpus = std.Thread.getCpuCount() catch 4;
@@ -159,13 +161,15 @@ pub const Pool = struct {
     }
 
     fn work(pool: *Pool) void {
-        while (!pool.cancel.load(.monotonic)) {
+        const cancel = pool.stop orelse &pool.cancel;
+        while (!pool.cancel.load(.monotonic) and !cancel.load(.monotonic)) {
             const i = pool.next.fetchAdd(1, .monotonic);
             if (i >= pool.paths.len) return;
-            var w: Walk = .{ .gpa = pool.gpa, .cancel = &pool.cancel };
+            var w: Walk = .{ .gpa = pool.gpa, .cancel = cancel };
             defer w.deinit();
             w.path(pool.paths[i].ptr);
             pool.out[i] = w.size;
+            if (pool.measured) |m| _ = m.fetchAdd(w.size.bytes, .monotonic);
         }
     }
 };

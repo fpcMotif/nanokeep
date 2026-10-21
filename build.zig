@@ -33,6 +33,7 @@ pub fn build(b: *std.Build) void {
     }) });
     exe.root_module.linkFramework("CoreServices", .{});
     exe.root_module.linkFramework("CoreGraphics", .{});
+    exe.root_module.linkFramework("IOKit", .{});
     b.installArtifact(exe);
 
     const plist = b.addWriteFiles().add("Info.plist", info_plist);
@@ -54,5 +55,6 @@ pub fn build(b: *std.Build) void {
     }) });
     tests.root_module.linkFramework("CoreServices", .{});
     tests.root_module.linkFramework("CoreGraphics", .{});
+    tests.root_module.linkFramework("IOKit", .{});
     b.step("test", "Run nanokeep tests").dependOn(&b.addRunArtifact(tests).step);
 }

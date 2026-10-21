@@ -9,7 +9,15 @@ const worktree = @import("worktree.zig");
 const apps = @import("apps.zig");
 const run = @import("run.zig");
 const fda = @import("fda.zig");
+const metrics = @import("metrics.zig");
+const machine = @import("machine.zig");
+const iokit = @import("iokit.zig");
+const view_clean = @import("view_clean.zig");
+const view_card = @import("view_card.zig");
 const objc = nanoui.objc;
+
+extern "c" const kCFRunLoopDefaultMode: *anyopaque;
+extern "c" fn CFRunLoopRunInMode(mode: *anyopaque, seconds: f64, once: bool) i32;
 const App = @import("app.zig").App;
 const view = @import("view.zig").view;
 
@@ -566,6 +574,222 @@ var label_buf: [48]u8 = undefined;
 fn cleanLabel(a: *App) []const u8 {
     var b: [32]u8 = undefined;
     return std.fmt.bufPrint(&label_buf, "Clean {s}", .{procs.bytes(&b, a.cleaner.selectedBytes())}) catch unreachable;
+}
+
+test "history finds the sample at or before a time, and charts columns across a range" {
+    var h: metrics.History = .{};
+    try std.testing.expectEqual(@as(?metrics.Sample, null), h.at(5, 1));
+    for (0..5) |i| h.push(.{ .t = @floatFromInt(i * 2), .gpu = @floatFromInt(i * 10) });
+    try std.testing.expectEqual(@as(f32, 20), h.at(5, 1).?.gpu);
+    try std.testing.expectEqual(@as(f32, 40), h.at(100, 1).?.gpu);
+    try std.testing.expectEqual(@as(f32, 0), h.at(-0.5, 1).?.gpu);
+    try std.testing.expectEqual(@as(?metrics.Sample, null), h.at(-3, 1));
+    try std.testing.expectEqual(@as(f32, 40), h.column(8, 8, 4, 3, 1).?.gpu);
+    try std.testing.expectEqual(@as(f32, 10), h.column(8, 8, 4, 0, 1).?.gpu);
+    try std.testing.expectEqual(@as(f32, 30), h.column(8, 8, 4, 2, 1).?.gpu);
+    try std.testing.expectEqual(@as(?metrics.Sample, null), h.column(8, 60, 4, 0, 1));
+    try std.testing.expectEqual(@as(f32, 40), h.peak(3, "gpu"));
+    try std.testing.expectEqual(@as(f32, 30), h.average(3, "gpu"));
+    for (0..metrics.history_len) |i| h.push(.{ .t = @floatFromInt(100 + i) });
+    try std.testing.expectEqual(@as(usize, metrics.history_len), h.len);
+    try std.testing.expectEqual(@as(f64, 100), h.get(0).t);
+}
+
+test "the disk map gives each found slice a dot and what is left to free space" {
+    var dots: [4]usize = undefined;
+    view_clean.allocate(&dots, &.{ 1, 0, 500, 0 }, 1000, 100);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 0, 50, 49 }, &dots);
+    view_clean.allocate(&dots, &.{ 900, 900, 900, 0 }, 1000, 10);
+    try std.testing.expectEqual(@as(usize, 10), dots[0] + dots[1] + dots[2] + dots[3]);
+    try std.testing.expectEqual(@as(usize, 0), dots[3]);
+}
+
+fn ifinfo(buf: []u8, flags: i32, in: u64, out: u64) void {
+    @memset(buf, 0);
+    std.mem.writeInt(u16, buf[0..2], @intCast(buf.len), .little);
+    buf[3] = 0x12;
+    std.mem.writeInt(i32, buf[8..12], flags, .little);
+    std.mem.writeInt(u64, buf[96..104], in, .little);
+    std.mem.writeInt(u64, buf[104..112], out, .little);
+}
+
+test "network counters add up the interfaces that are up, leaving out loopback" {
+    var buf: [3 * 160]u8 = undefined;
+    ifinfo(buf[0..160], 0x1, 1000, 10);
+    ifinfo(buf[160..320], 0x1 | 0x8, 5000, 50);
+    ifinfo(buf[320..480], 0x0, 7000, 70);
+    const got = metrics.sumInterfaces(&buf);
+    try std.testing.expectEqual(@as(u64, 1000), got.in);
+    try std.testing.expectEqual(@as(u64, 10), got.out);
+    const live = metrics.netBytes(gpa);
+    try std.testing.expect(live.in > 0);
+}
+
+test "the Mac's name comes from system_profiler, or from its model" {
+    const json = "{ \"SPHardwareDataType\" : [ { \"_name\" : \"hardware_overview\", \"machine_model\" : \"Mac16,11\", \"machine_name\" : \"Mac mini\" } ] }";
+    try std.testing.expectEqualStrings("Mac mini", machine.jsonField(json, "machine_name").?);
+    try std.testing.expectEqualStrings("Mac16,11", machine.jsonField(json, "machine_model").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), machine.jsonField(json, "serial_number"));
+    try std.testing.expectEqualStrings("MacBook Pro", machine.familyOf("MacBookPro18,3"));
+    try std.testing.expectEqualStrings("Mac mini", machine.familyOf("Macmini9,1"));
+    try std.testing.expectEqualStrings("Mac", machine.familyOf("Mac16,11"));
+    try std.testing.expect(iokit.keepsAwake("PreventUserIdleSystemSleep"));
+    try std.testing.expect(!iokit.keepsAwake("UserIsActive"));
+    try std.testing.expect(iokit.displayKind("NoDisplaySleepAssertion"));
+}
+
+test "the metrics sampler reads this machine" {
+    var m: metrics.Metrics = .init();
+    defer m.deinit();
+    m.sample(0, 0);
+    try std.testing.expectEqual(@as(usize, 0), m.history.len);
+    m.sample(1, 2.5);
+    try std.testing.expectEqual(@as(usize, 1), m.history.len);
+    try std.testing.expect(m.cpu.count > 0);
+    try std.testing.expect(m.cpu.busy() >= 0 and m.cpu.busy() <= 100.5);
+    try std.testing.expect(m.memory.total > m.memory.used());
+    try std.testing.expect(m.memory.app > 0 and m.memory.wired > 0);
+    try std.testing.expect(m.disk.read_total > 0);
+    try std.testing.expectEqual(@as(f32, 2.5), m.history.last().?.power);
+    var mc: machine.Machine = .{};
+    mc.read();
+    try std.testing.expect(mc.chip.len > 0 and mc.os.len > 0 and mc.memory > 0 and mc.boot > 0);
+    try std.testing.expect(mc.volume.len > 0);
+}
+
+fn pump(cl: *const cleaner.Cleaner) void {
+    var spins: usize = 0;
+    while (cl.job != null and spins < 600) : (spins += 1) _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+}
+
+test "a scan fills in one category at a time, and Cancel stops it" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Library/Caches/com.vendor.app Library/Logs .claude/projects/p && dd if=/dev/urandom of=Library/Caches/com.vendor.app/blob bs=4096 count=10 2>/dev/null && printf x > Library/Logs/a.log && printf '{{}}' > .claude/projects/p/old.jsonl && printf '{{}}' > .claude/projects/p/new.jsonl && touch -t 202001010000 .claude/projects/p/old.jsonl", .{});
+    var cl: cleaner.Cleaner = .init(gpa, t.path(), "");
+    defer cl.deinit();
+    var changes: usize = 0;
+    const Count = struct {
+        fn f(ctx: *anyopaque) void {
+            const n: *usize = @ptrCast(@alignCast(ctx));
+            n.* += 1;
+        }
+    };
+    cl.on_change = .{ .ctx = &changes, .func = Count.f };
+    cl.scan();
+    try std.testing.expectEqual(cleaner.Phase.scanning, cl.phase);
+    try std.testing.expect(cl.step() != null);
+    pump(&cl);
+    try std.testing.expect(cl.scanned);
+    try std.testing.expect(changes >= cleaner.specs.len);
+    for (&cl.cats) |*cat| try std.testing.expect(cat.measured);
+    const agents = &cl.cats[@intFromEnum(cleaner.Kind.agents)];
+    try std.testing.expectEqual(@as(usize, 1), agents.items().len);
+    try std.testing.expect(std.mem.endsWith(u8, agents.items()[0].path, "old.jsonl"));
+    try std.testing.expect(cl.cats[@intFromEnum(cleaner.Kind.caches)].bytes() >= 10 * 4096);
+    try std.testing.expectEqual(cl.total(), cl.found());
+    cl.scan();
+    try std.testing.expect(!cl.scanned);
+    cl.cancel();
+    pump(&cl);
+    try std.testing.expect(cl.cancelled);
+    try std.testing.expect(!cl.scanned);
+    try std.testing.expectEqual(cleaner.Phase.idle, cl.phase);
+}
+
+fn fakeClock() f64 {
+    return 0;
+}
+
+test "every page draws from this Mac's samples" {
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.cleaner.sync = true;
+    a.machine.read();
+    a.inventory.loaded = true;
+    for (0..6) |i| {
+        const tm: f64 = @floatFromInt(i * 2);
+        a.sampler.sample(tm);
+        a.metrics.sample(tm, a.sampler.system.power);
+    }
+    a.last = 1e9;
+    a.everyone.build(a.sampler.procs.items, .{ .show = .all, .uid = a.sampler.uid }, &a.expanded_groups) catch {};
+    try std.testing.expectEqual(@as(usize, 5), a.metrics.history.len);
+    var idx: [10]u32 = undefined;
+    const n = view_card.top(&a, .memory, &idx);
+    try std.testing.expect(n > 0);
+    for (idx[1..n], 0..) |gi, k| try std.testing.expect(a.everyone.groups.items[gi].memory <= a.everyone.groups.items[idx[k]].memory);
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(1240, 820);
+    const Want = struct { page: @import("app.zig").Page, text: []const u8 };
+    const pages = [_]Want{
+        .{ .page = .overview, .text = "Memory by Type" },
+        .{ .page = .cpu, .text = "Processor Load" },
+        .{ .page = .memory, .text = "Swap" },
+        .{ .page = .gpu, .text = "Engines" },
+        .{ .page = .disk, .text = "Disk Activity" },
+        .{ .page = .network, .text = "Network Activity" },
+        .{ .page = .energy, .text = "Keeping Awake" },
+        .{ .page = .about, .text = "Hardware" },
+        .{ .page = .cleanup, .text = "Scan to see what can be cleaned." },
+    };
+    for (pages) |p| {
+        a.page = p.page;
+        tester.settle(1);
+        if (!tester.hasText(p.text)) {
+            std.debug.print("missing {s} on {s}\n", .{ p.text, @tagName(p.page) });
+            return error.Missing;
+        }
+        if (std.c.getenv("NANOKEEP_SHOT_DIR")) |dir| {
+            var pb: [512]u8 = undefined;
+            try tester.screenshot(try std.fmt.bufPrint(&pb, "{s}/{s}.png", .{ std.mem.span(dir), @tagName(p.page) }));
+        }
+    }
+    a.page = .about;
+    tester.settle(1);
+    try tester.clickText("Show");
+    tester.settle(1);
+    try std.testing.expect(a.show_serial);
+}
+
+test "the cleanup page shows a scan as it runs and what it found" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Library/Caches/com.vendor.big Library/Logs Library/Developer/Xcode/DerivedData/App && dd if=/dev/urandom of=Library/Caches/com.vendor.big/blob bs=4096 count=400 2>/dev/null && dd if=/dev/urandom of=Library/Developer/Xcode/DerivedData/App/o bs=4096 count=200 2>/dev/null && printf x > Library/Logs/app.log", .{});
+    var a: App = .init(gpa, t.path(), "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.loaded = true;
+    a.machine.read();
+    a.sampler.sample(0);
+    a.last = 1e9;
+    a.page = .cleanup;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(1240, 820);
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Scan to see what can be cleaned."));
+    try shotTo(&tester, "cleanup-idle");
+    a.cleaner.scan();
+    tester.advance(0.5);
+    try std.testing.expect(tester.hasText("Cancel"));
+    try std.testing.expect(tester.hasText("Measuring caches…"));
+    try shotTo(&tester, "cleanup-scanning");
+    pump(&a.cleaner);
+    tester.settle(2);
+    try std.testing.expect(a.cleaner.scanned);
+    try std.testing.expect(tester.containsText("Clean "));
+    try shotTo(&tester, "cleanup-found");
+}
+
+fn shotTo(tester: *ui.Tester, name: []const u8) !void {
+    const dir = std.c.getenv("NANOKEEP_SHOT_DIR") orelse return;
+    var pb: [512]u8 = undefined;
+    try tester.screenshot(try std.fmt.bufPrint(&pb, "{s}/{s}.png", .{ std.mem.span(dir), name }));
 }
 
 test {

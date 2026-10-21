@@ -21,7 +21,8 @@ pub fn main(init: std.process.Init) !void {
     defer a.deinit();
     a.listen();
     a.clock = seconds;
-    a.cleaner.scan();
+    a.machine.read();
+    a.machine.lookUpName();
     a.inventory.load();
     a.orderApps();
     a.window = try app.newWindow(.{

@@ -20,7 +20,7 @@ extern "c" fn getpwuid(uid: c_uint) ?*extern struct { name: ?[*:0]const u8 };
 
 const PROC_PIDTASKINFO = 4;
 const PROC_PIDTBSDSHORTINFO = 13;
-const RUSAGE_INFO_V2 = 2;
+const RUSAGE_INFO_V6 = 6;
 const PROCESSOR_CPU_LOAD_INFO = 2;
 const HOST_VM_INFO64 = 4;
 
@@ -46,6 +46,30 @@ const Rusage = extern struct {
     child_elapsed_abstime: u64,
     diskio_bytesread: u64,
     diskio_byteswritten: u64,
+    cpu_time_qos: [7]u64,
+    billed_system_time: u64,
+    serviced_system_time: u64,
+    logical_writes: u64,
+    lifetime_max_phys_footprint: u64,
+    instructions: u64,
+    cycles: u64,
+    billed_energy: u64,
+    serviced_energy: u64,
+    interval_max_phys_footprint: u64,
+    runnable_time: u64,
+    flags: u64,
+    user_ptime: u64,
+    system_ptime: u64,
+    pinstructions: u64,
+    pcycles: u64,
+    energy_nj: u64,
+    penergy_nj: u64,
+    secure_time_in_system: u64,
+    secure_ptime_in_system: u64,
+    neural_footprint: u64,
+    lifetime_max_neural_footprint: u64,
+    interval_max_neural_footprint: u64,
+    reserved: [9]u64,
 };
 
 const TaskInfo = extern struct {
@@ -127,6 +151,7 @@ pub const Proc = struct {
     threads: u32 = 0,
     cpu_time_ns: u64 = 0,
     disk_rate: f32 = 0,
+    energy: f32 = 0,
     known: bool = false,
 };
 
@@ -136,13 +161,15 @@ pub const System = struct {
     mem_total: u64 = 0,
     disk_free: u64 = 0,
     disk_total: u64 = 0,
+    power: f32 = 0,
+    threads: u64 = 0,
 };
 
 pub const Signal = enum(c_int) { quit = 15, force = 9 };
 
 pub const QuitError = error{ NotYours, Itself, Failed };
 
-const Prev = struct { time_ns: u64, disk: u64 };
+const Prev = struct { time_ns: u64, disk: u64, energy: u64 };
 
 pub const Sampler = struct {
     gpa: std.mem.Allocator,
@@ -203,6 +230,8 @@ pub const Sampler = struct {
         var next: std.AutoHashMapUnmanaged(i32, Prev) = .empty;
         next.ensureTotalCapacity(s.gpa, @intCast(n)) catch return;
         const wall = now - s.prev_wall;
+        s.system.power = 0;
+        s.system.threads = 0;
         var info: ShortInfo = undefined;
         var ru: Rusage = undefined;
         var ti: TaskInfo = undefined;
@@ -215,19 +244,22 @@ pub const Sampler = struct {
             const full = if (plen > 0) path[0..@intCast(plen)] else std.mem.sliceTo(&info.comm, 0);
             p.name = ar.dupe(u8, displayName(full)) catch "?";
             p.bundle = ar.dupe(u8, outerBundle(full)) catch "";
-            if (proc_pid_rusage(pid, RUSAGE_INFO_V2, &ru) == 0) {
+            if (proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) == 0) {
                 const t = (ru.user_time + ru.system_time) * s.num / s.den;
                 const disk = ru.diskio_bytesread + ru.diskio_byteswritten;
                 p.memory = ru.phys_footprint;
                 p.cpu_time_ns = t;
                 p.known = true;
                 if (proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti, @sizeOf(TaskInfo)) == @sizeOf(TaskInfo)) p.threads = @intCast(@max(0, ti.threadnum));
-                next.putAssumeCapacity(pid, .{ .time_ns = t, .disk = disk });
+                next.putAssumeCapacity(pid, .{ .time_ns = t, .disk = disk, .energy = ru.energy_nj });
                 if (s.samples > 0 and wall > 0) if (s.prev.get(pid)) |before| {
                     p.cpu = @floatCast(@as(f64, @floatFromInt(t -| before.time_ns)) / (wall * 1e9) * 100);
                     p.disk_rate = @floatCast(@as(f64, @floatFromInt(disk -| before.disk)) / wall);
+                    p.energy = @floatCast(@as(f64, @floatFromInt(ru.energy_nj -| before.energy)) / (wall * 1e9));
+                    s.system.power += p.energy;
                 };
             }
+            s.system.threads += p.threads;
             s.procs.appendAssumeCapacity(p);
         }
         s.prev.deinit(s.gpa);

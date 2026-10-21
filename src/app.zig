@@ -5,12 +5,40 @@ const groups = @import("groups.zig");
 const cleaner = @import("cleaner.zig");
 const apps = @import("apps.zig");
 const fda = @import("fda.zig");
+const metrics = @import("metrics.zig");
+const machine = @import("machine.zig");
+const iokit = @import("iokit.zig");
 
 extern "c" fn time(t: ?*i64) i64;
 
 pub const interval = 2.0;
 
-pub const Page = enum { overview, processes, apps, cleanup };
+pub const Page = enum { overview, processes, cpu, memory, gpu, disk, network, energy, apps, cleanup, about };
+
+pub const Range = enum {
+    m1,
+    m5,
+    m15,
+    h1,
+
+    pub fn seconds(r: Range) f64 {
+        return switch (r) {
+            .m1 => 60,
+            .m5 => 300,
+            .m15 => 900,
+            .h1 => 3600,
+        };
+    }
+
+    pub fn title(r: Range) []const u8 {
+        return switch (r) {
+            .m1 => "1m",
+            .m5 => "5m",
+            .m15 => "15m",
+            .h1 => "1h",
+        };
+    }
+};
 
 pub const AppSort = enum { name, version, size, kind, opened, source };
 
@@ -22,8 +50,15 @@ pub const App = struct {
     cleaner: cleaner.Cleaner,
     inventory: apps.Inventory,
     table: groups.Table,
+    everyone: groups.Table,
+    metrics: metrics.Metrics,
+    machine: machine.Machine = .{},
     toaster: nanoui.kit.Toaster,
     page: Page = .overview,
+    range: Range = .h1,
+    awake: [32]iokit.Assertion = undefined,
+    awake_count: usize = 0,
+    show_serial: bool = false,
     live: bool = true,
     last: f64 = -1e9,
     show: usize = 2,
@@ -56,6 +91,8 @@ pub const App = struct {
             .cleaner = .init(gpa, home, tmpdir),
             .inventory = .{ .gpa = gpa, .dirs = app_dirs },
             .table = .{ .gpa = gpa },
+            .everyone = .{ .gpa = gpa },
+            .metrics = .init(),
             .toaster = .{ .gpa = gpa },
         };
     }
@@ -63,10 +100,14 @@ pub const App = struct {
     pub fn listen(a: *App) void {
         a.cleaner.on_change = .{ .ctx = a, .func = changed };
         a.inventory.on_change = .{ .ctx = a, .func = changed };
+        a.machine.on_change = .{ .ctx = a, .func = redraw };
     }
 
     pub fn deinit(a: *App) void {
         if (a.guide) |*g| g.deinit();
+        a.machine.deinit();
+        a.metrics.deinit();
+        a.everyone.deinit();
         a.app_rows.deinit(a.gpa);
         a.expanded_groups.deinit(a.gpa);
         a.table.deinit();
@@ -86,6 +127,11 @@ pub const App = struct {
         if (a.window) |w| w.redraw();
     }
 
+    fn redraw(ctx: *anyopaque) void {
+        const a: *App = @ptrCast(@alignCast(ctx));
+        if (a.window) |w| w.redraw();
+    }
+
     pub fn reportClean(a: *App) void {
         const r = a.cleaner.last orelse return;
         a.cleaner.last = null;
@@ -102,6 +148,9 @@ pub const App = struct {
     pub fn tick(a: *App, t: f64) f32 {
         if (a.live and t - a.last >= interval) {
             a.sampler.sample(t);
+            a.metrics.sample(t, a.sampler.system.power);
+            a.awake_count = iokit.assertions(&a.awake);
+            a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
             a.last = t;
             if (a.sampler.samples == 1) a.last = t - interval + 0.6;
         }
@@ -256,6 +305,8 @@ pub const App = struct {
         a.orderApps();
     }
 };
+
+const no_expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
 
 fn trashPath(path: []const u8) bool {
     return nanoui.shell.trash(path);
