@@ -14,6 +14,7 @@ const machine = @import("machine.zig");
 const iokit = @import("iokit.zig");
 const view_clean = @import("view_clean.zig");
 const view_card = @import("view_card.zig");
+const measure = @import("measure.zig");
 const objc = nanoui.objc;
 
 extern "c" const kCFRunLoopDefaultMode: *anyopaque;
@@ -792,6 +793,59 @@ fn shotTo(tester: *ui.Tester, name: []const u8) !void {
     const dir = std.c.getenv("NANOKEEP_SHOT_DIR") orelse return;
     var pb: [512]u8 = undefined;
     try tester.screenshot(try std.fmt.bufPrint(&pb, "{s}/{s}.png", .{ std.mem.span(dir), name }));
+}
+
+test "the bench reads this process's physical footprint and its peak since a reset" {
+    const before = measure.footprint();
+    try std.testing.expect(before.now > 1 << 20);
+    try std.testing.expect(before.peak >= before.now);
+    measure.resetPeak();
+    const block = try std.heap.page_allocator.alloc(u8, 32 << 20);
+    @memset(block, 0xa5);
+    std.heap.page_allocator.free(block);
+    const after = measure.footprint();
+    try std.testing.expect(after.interval_peak >= before.now + (30 << 20));
+    try std.testing.expect(after.now < after.interval_peak);
+}
+
+test "the bench reports nearest-rank p50 and p95 of its timings" {
+    var hundred: [100]f64 = undefined;
+    for (&hundred, 0..) |*v, i| v.* = @floatFromInt(100 - i);
+    const s = measure.Stats.of(&hundred);
+    try std.testing.expectEqual(@as(f64, 50), s.p50);
+    try std.testing.expectEqual(@as(f64, 95), s.p95);
+    var few = [_]f64{ 9, 1, 5 };
+    try std.testing.expectEqual(@as(f64, 5), measure.Stats.of(&few).p50);
+    try std.testing.expectEqual(@as(f64, 9), measure.Stats.of(&few).p95);
+    var one = [_]f64{7};
+    try std.testing.expectEqual(@as(f64, 7), measure.Stats.of(&one).p95);
+}
+
+test "a bench value over its budget fails, at its budget passes, and without a budget fails" {
+    const table = [_]measure.Budget{
+        .{ .name = "idle_mb", .budget = 140, .target = 40 },
+        .{ .name = "scan_ms", .budget = 900, .target = 36 },
+    };
+    try std.testing.expect(!measure.judge(.{ .name = "idle_mb", .value = 140.5 }, &table).ok());
+    try std.testing.expect(measure.judge(.{ .name = "idle_mb", .value = 140 }, &table).ok());
+    try std.testing.expect(measure.judge(.{ .name = "scan_ms", .value = 12 }, &table).ok());
+    const unknown = measure.judge(.{ .name = "hover_p95_ms", .value = 0 }, &table);
+    try std.testing.expect(!unknown.ok());
+    try std.testing.expectEqual(@as(?measure.Budget, null), unknown.budget);
+}
+
+test "the bench reads the leak count from the leaks tool's summary" {
+    const found =
+        \\Process 18802 is not debuggable. Due to security restrictions, leaks can only show or save contents of readonly memory of restricted processes.
+        \\Process:         DockHelper [18802]
+        \\Process 18802: 48473 nodes malloced for 15932 KB
+        \\Process 18802: 3 leaks for 208 total leaked bytes.
+        \\
+    ;
+    try std.testing.expectEqual(@as(?u64, 3), measure.parseLeaks(found));
+    try std.testing.expectEqual(@as(?u64, 0), measure.parseLeaks("Process 7: 0 leaks for 0 total leaked bytes.\n"));
+    try std.testing.expectEqual(@as(?u64, 1), measure.parseLeaks("Process 7: 1 leak for 16 total leaked bytes.\n"));
+    try std.testing.expectEqual(@as(?u64, null), measure.parseLeaks("leaks[9]: [fatal] unable to read input graph: task_for_pid failed\n"));
 }
 
 test {

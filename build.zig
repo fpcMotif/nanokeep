@@ -46,7 +46,24 @@ pub fn build(b: *std.Build) void {
     run.addPassthruArgs();
     b.step("run", "Run nanokeep").dependOn(&run.step);
 
-    const tests = b.addTest(.{ .root_module = b.createModule(.{
+    const bench_nanoui = b.dependency("nanoui", .{ .target = target, .optimize = .ReleaseFast }).module("nanoui");
+    const bench = b.addExecutable(.{ .name = "nanokeep-bench", .root_module = b.createModule(.{
+        .root_source_file = b.path("src/bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .link_libc = true,
+        .imports = &.{.{ .name = "nanoui", .module = bench_nanoui }},
+    }) });
+    bench.root_module.linkFramework("CoreServices", .{});
+    bench.root_module.linkFramework("CoreGraphics", .{});
+    bench.root_module.linkFramework("IOKit", .{});
+    const bench_run = b.addRunArtifact(bench);
+    bench_run.addPassthruArgs();
+    bench_run.has_side_effects = true;
+    b.step("bench", "Measure memory and latency against budgets").dependOn(&bench_run.step);
+
+    const filters = b.option([]const []const u8, "test-filter", "Run only tests whose names contain this text") orelse &.{};
+    const tests = b.addTest(.{ .filters = filters, .root_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
