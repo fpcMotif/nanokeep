@@ -4,6 +4,7 @@ const measure = @import("measure.zig");
 const run = @import("run.zig");
 const App = @import("app.zig").App;
 const Page = @import("app.zig").Page;
+const sample_interval = @import("app.zig").interval;
 const objc = nanoui.objc;
 const start = @import("main.zig").start;
 const seconds = @import("main.zig").seconds;
@@ -36,11 +37,12 @@ const budgets = [_]measure.Budget{
     .{ .name = "hover_rebuilds", .budget = 0, .target = 0 },
     .{ .name = "sample_p50_ms", .budget = 6, .target = 1.36 },
     .{ .name = "sample_p95_ms", .budget = 8, .target = 1.65 },
-    .{ .name = "idle_mb", .budget = 300, .target = 40 },
+    .{ .name = "idle_mb", .budget = 70, .target = 40 },
+    .{ .name = "idle_mean_mb", .budget = 140, .target = 40 },
     .{ .name = "scan_ms", .budget = 100, .target = 40 },
     .{ .name = "scan_peak_mb", .budget = 303, .target = 60 },
     .{ .name = "repeat_scan_ms", .budget = 61, .target = 1.4 },
-    .{ .name = "hidden_mb", .budget = 88, .target = 20 },
+    .{ .name = "hidden_mb", .budget = 55, .target = 20 },
     .{ .name = "show_ms", .budget = 375, .target = 2.9 },
     .{ .name = "cycle_growth_mb", .budget = 3, .target = 2 },
     .{ .name = "peak_mb", .budget = 327, .target = 60 },
@@ -109,6 +111,27 @@ const Bench = struct {
         const s = measure.Stats.of(samples);
         try b.put(name ++ "_p50_ms", s.p50);
         try b.put(name ++ "_p95_ms", s.p95);
+    }
+
+    const Idle = struct { floor: u64, mean: f64 };
+
+    fn idle(b: *Bench) !Idle {
+        b.a.page = .overview;
+        pump(6);
+        var floor: ?u64 = null;
+        var weighted: f64 = 0;
+        const begin = seconds();
+        const end = begin + sample_interval + 0.5;
+        var last = begin;
+        while (last < end) {
+            const now = measure.footprint().now;
+            if (b.surface().renderer.queue == null) floor = @min(floor orelse now, now);
+            pumpOnce(0.01);
+            const t = seconds();
+            weighted += @as(f64, @floatFromInt(now)) * (t - last);
+            last = t;
+        }
+        return .{ .floor = floor orelse return error.RendererNeverRested, .mean = weighted / (last - begin) };
     }
 
     fn visible(b: *Bench) bool {
@@ -338,10 +361,9 @@ pub fn main(init: std.process.Init) !void {
     const explained = (a.sampler.samples - sampled) + (a.apps_version - inventoried);
     try b.put("hover_rebuilds", @floatFromInt((a.rebuilds - rebuilt) -| explained));
     try b.sampling();
-    a.page = .overview;
-    pump(6);
-    const idle = measure.footprint().now;
-    try b.put("idle_mb", mb(idle));
+    const idle = try b.idle();
+    try b.put("idle_mb", mb(idle.floor));
+    try b.put("idle_mean_mb", idle.mean / (1 << 20));
 
     measure.resetPeak();
     try b.put("scan_ms", try b.scan());
@@ -350,9 +372,7 @@ pub fn main(init: std.process.Init) !void {
     a.page = .overview;
 
     for (0..cycles) |_| try b.cycle();
-    a.page = .overview;
-    pump(6);
-    try b.put("cycle_growth_mb", mb(measure.footprint().now) - mb(idle));
+    try b.put("cycle_growth_mb", mb((try b.idle()).floor) - mb(idle.floor));
     try b.hideAndShow();
     try b.put("peak_mb", mb(measure.footprint().peak));
     try b.leaks();
