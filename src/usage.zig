@@ -2,7 +2,6 @@ const std = @import("std");
 const procs = @import("procs.zig");
 const apps = @import("apps.zig");
 const plist = @import("plist.zig");
-const fuzzy = @import("fuzzy.zig");
 
 extern "c" fn mkdir(path: [*:0]const u8, mode: c_uint) c_int;
 extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
@@ -25,6 +24,7 @@ pub const Ledger = struct {
     seen: std.StringHashMapUnmanaged(Use) = .empty,
     dirty: bool = false,
     saved_at: i64 = 0,
+    runs: u64 = 0,
 
     pub fn deinit(l: *Ledger) void {
         var it = l.seen.keyIterator();
@@ -33,7 +33,7 @@ pub const Ledger = struct {
     }
 
     pub fn observe(l: *Ledger, running: []const procs.Proc, now: i64) void {
-        for (running) |p| if (p.bundle.len > 0 and std.mem.indexOfAny(u8, p.bundle, "\t\n") == null) l.record(p.bundle, now);
+        for (running) |p| l.record(p.bundle, now);
     }
 
     fn record(l: *Ledger, bundle: []const u8, at: i64) void {
@@ -41,10 +41,12 @@ pub const Ledger = struct {
         if (at > u.at) {
             u.at = at;
             l.dirty = true;
+            l.runs += 1;
         }
     }
 
     fn entry(l: *Ledger, bundle: []const u8) ?*Use {
+        if (bundle.len == 0 or std.mem.indexOfAny(u8, bundle, "\t\n") != null) return null;
         if (l.seen.getPtr(bundle)) |u| return u;
         const key = l.gpa.dupe(u8, bundle) catch return null;
         const got = l.seen.getOrPut(l.gpa, key) catch {
@@ -56,7 +58,6 @@ pub const Ledger = struct {
     }
 
     pub fn pick(l: *Ledger, bundle: []const u8) void {
-        if (bundle.len == 0 or std.mem.indexOfAny(u8, bundle, "\t\n") != null) return;
         const u = l.entry(bundle) orelse return;
         u.picks +|= 1;
         l.dirty = true;
@@ -66,13 +67,12 @@ pub const Ledger = struct {
         return (l.seen.get(bundle) orelse return 0).at;
     }
 
-    pub fn picks(l: *const Ledger, bundle: []const u8) u32 {
-        return (l.seen.get(bundle) orelse return 0).picks;
-    }
-
     pub fn boost(l: *const Ledger, bundle: []const u8, now: i64) i32 {
         const u = l.seen.get(bundle) orelse return 0;
-        return fuzzy.frecency(now, u.at, u.picks);
+        const age = now - u.at;
+        const day = std.time.s_per_day;
+        const recent: i32 = if (u.at == 0) 0 else if (age < std.time.s_per_hour) 24 else if (age < day) 16 else if (age < 7 * day) 8 else if (age < 30 * day) 4 else 0;
+        return recent + 4 * @as(i32, @intCast(@min(u.picks, 8)));
     }
 
     pub fn apply(l: *const Ledger, list: []apps.AppInfo) bool {

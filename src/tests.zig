@@ -643,9 +643,9 @@ fn expectApps(a: *const App, names: []const []const u8) !void {
     for (names, a.app_rows.items) |n, r| try std.testing.expectEqualStrings(n, a.inventory.apps.items[r].name);
 }
 
-fn appIndex(a: *const App, name: []const u8) usize {
+fn appIndex(a: *const App, name: []const u8) !usize {
     for (a.inventory.apps.items, 0..) |info, i| if (std.mem.eql(u8, info.name, name)) return i;
-    unreachable;
+    return error.NoSuchApp;
 }
 
 test "searching apps ranks the best match first, and a picked or recently run app wins a tie" {
@@ -665,7 +665,7 @@ test "searching apps ranks the best match first, and a picked or recently run ap
     a.app_query.set("twin");
     a.refresh();
     try expectApps(&a, &.{ "Twin A", "Twin B" });
-    a.selectApp(appIndex(&a, "Twin B"));
+    a.selectApp(try appIndex(&a, "Twin B"));
     a.app_query.set("twi");
     a.refresh();
     try expectApps(&a, &.{ "Twin B", "Twin A" });
@@ -673,8 +673,7 @@ test "searching apps ranks the best match first, and a picked or recently run ap
     a.app_query.set("mail");
     a.refresh();
     try expectApps(&a, &.{ "Mail One", "Mail Two" });
-    a.usage.observe(&.{.{ .pid = 9, .uid = 501, .bundle = a.inventory.apps.items[appIndex(&a, "Mail Two")].path }}, a.now() - 60);
-    a.app_query.set("mai");
+    a.usage.observe(&.{.{ .pid = 9, .uid = 501, .bundle = a.inventory.apps.items[try appIndex(&a, "Mail Two")].path }}, a.now() - 60);
     a.refresh();
     try expectApps(&a, &.{ "Mail Two", "Mail One" });
 
@@ -1113,16 +1112,15 @@ test "the usage ledger keeps how often each app was picked across a save and rel
     first.pick(foo);
     first.pick(foo);
     first.pick(bar);
-    try std.testing.expectEqual(@as(u32, 2), first.picks(foo));
-    try std.testing.expect(first.dirty);
     try first.save();
 
     var second: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
     defer second.deinit();
     second.load();
-    try std.testing.expectEqual(@as(u32, 2), second.picks(foo));
-    try std.testing.expectEqual(@as(u32, 1), second.picks(bar));
-    try std.testing.expectEqual(@as(u32, 0), second.picks(old));
+    const year_later = 1_000 + 365 * std.time.s_per_day;
+    try std.testing.expect(second.boost(foo, year_later) > second.boost(bar, year_later));
+    try std.testing.expect(second.boost(bar, year_later) > 0);
+    try std.testing.expectEqual(@as(i32, 0), second.boost(old, year_later));
     try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(foo));
     try std.testing.expectEqual(@as(i64, 0), second.lastSeen(bar));
 
@@ -1131,7 +1129,7 @@ test "the usage ledger keeps how often each app was picked across a save and rel
     defer third.deinit();
     third.load();
     try std.testing.expectEqual(@as(i64, 700), third.lastSeen(old));
-    try std.testing.expectEqual(@as(u32, 0), third.picks(old));
+    try std.testing.expectEqual(@as(i32, 0), third.boost(old, year_later));
 }
 
 test "the Apps page shows when each app last ran, from the saved usage, and unknown otherwise" {

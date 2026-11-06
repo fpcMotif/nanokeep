@@ -210,8 +210,10 @@ pub const App = struct {
 
     fn appsKey(a: *const App) u64 {
         var h: std.hash.Wyhash = .init(0);
-        h.update(std.mem.asBytes(&[_]u64{ a.apps_version, @intFromEnum(a.app_sort), @intFromBool(a.app_reversed) }));
-        h.update(std.mem.trim(u8, a.app_query.text(), " "));
+        const q = std.mem.trim(u8, a.app_query.text(), " ");
+        const runs = if (q.len > 0) a.usage.runs else 0;
+        h.update(std.mem.asBytes(&[_]u64{ a.apps_version, @intFromEnum(a.app_sort), @intFromBool(a.app_reversed), runs }));
+        h.update(q);
         return h.final();
     }
 

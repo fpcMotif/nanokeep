@@ -23,7 +23,7 @@ pub const Group = struct {
     time_ns: u64 = 0,
     energy: f32 = 0,
     known: bool = false,
-    rank: i32 = std.math.minInt(i32),
+    rank: i32 = 0,
 };
 
 pub const Row = struct { group: u32, member: ?u32 = null };
@@ -83,6 +83,7 @@ pub const Table = struct {
         try t.ranks.resize(t.gpa, items.len);
         for (items, 0..) |*p, i| {
             if (!shown(p, o)) continue;
+            t.ranks.items[i] = 0;
             if (o.query.len > 0) t.ranks.items[i] = match(p, o.query) orelse continue;
             try picked.append(t.gpa, @intCast(i));
         }
@@ -109,6 +110,7 @@ pub const Table = struct {
                     .user = p.user,
                     .pid = p.pid,
                     .first = @intCast(t.members.items.len),
+                    .rank = t.ranks.items[i],
                 });
             }
             const g = &t.groups.items[t.groups.items.len - 1];
@@ -122,7 +124,7 @@ pub const Table = struct {
             g.energy += p.energy;
             g.known = g.known or p.known;
             if (p.pid < g.pid) g.pid = p.pid;
-            if (o.query.len > 0) g.rank = @max(g.rank, t.ranks.items[i]);
+            g.rank = @max(g.rank, t.ranks.items[i]);
         }
         if (o.query.len > 0) if (o.ledger) |l| {
             for (t.groups.items) |*g| if (g.bundle.len > 0) {
