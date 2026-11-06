@@ -65,7 +65,7 @@ fn row(c: *ui.Context, a: *App, index: u32, i: usize, now: i64) void {
     const d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
     defer d.end();
     if (d.clicked()) {
-        a.app_selected = if (sel) null else index;
+        a.selectApp(index);
         c.changed = true;
     }
     const open = a.appRunning(info);

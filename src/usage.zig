@@ -2,6 +2,7 @@ const std = @import("std");
 const procs = @import("procs.zig");
 const apps = @import("apps.zig");
 const plist = @import("plist.zig");
+const fuzzy = @import("fuzzy.zig");
 
 extern "c" fn mkdir(path: [*:0]const u8, mode: c_uint) c_int;
 extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
@@ -16,10 +17,12 @@ const O_TRUNC = 0x400;
 const dir = "Library/Application Support/nanokeep";
 pub const save_every = 300;
 
+pub const Use = struct { at: i64 = 0, picks: u32 = 0 };
+
 pub const Ledger = struct {
     gpa: std.mem.Allocator,
     home: []const u8,
-    seen: std.StringHashMapUnmanaged(i64) = .empty,
+    seen: std.StringHashMapUnmanaged(Use) = .empty,
     dirty: bool = false,
     saved_at: i64 = 0,
 
@@ -34,20 +37,42 @@ pub const Ledger = struct {
     }
 
     fn record(l: *Ledger, bundle: []const u8, at: i64) void {
-        if (l.seen.getPtr(bundle)) |t| {
-            if (at > t.*) {
-                t.* = at;
-                l.dirty = true;
-            }
-            return;
+        const u = l.entry(bundle) orelse return;
+        if (at > u.at) {
+            u.at = at;
+            l.dirty = true;
         }
-        const key = l.gpa.dupe(u8, bundle) catch return;
-        l.seen.put(l.gpa, key, at) catch return l.gpa.free(key);
+    }
+
+    fn entry(l: *Ledger, bundle: []const u8) ?*Use {
+        if (l.seen.getPtr(bundle)) |u| return u;
+        const key = l.gpa.dupe(u8, bundle) catch return null;
+        const got = l.seen.getOrPut(l.gpa, key) catch {
+            l.gpa.free(key);
+            return null;
+        };
+        got.value_ptr.* = .{};
+        return got.value_ptr;
+    }
+
+    pub fn pick(l: *Ledger, bundle: []const u8) void {
+        if (bundle.len == 0 or std.mem.indexOfAny(u8, bundle, "\t\n") != null) return;
+        const u = l.entry(bundle) orelse return;
+        u.picks +|= 1;
         l.dirty = true;
     }
 
     pub fn lastSeen(l: *const Ledger, bundle: []const u8) i64 {
-        return l.seen.get(bundle) orelse 0;
+        return (l.seen.get(bundle) orelse return 0).at;
+    }
+
+    pub fn picks(l: *const Ledger, bundle: []const u8) u32 {
+        return (l.seen.get(bundle) orelse return 0).picks;
+    }
+
+    pub fn boost(l: *const Ledger, bundle: []const u8, now: i64) i32 {
+        const u = l.seen.get(bundle) orelse return 0;
+        return fuzzy.frecency(now, u.at, u.picks);
     }
 
     pub fn apply(l: *const Ledger, list: []apps.AppInfo) bool {
@@ -70,11 +95,19 @@ pub const Ledger = struct {
         while (lines.next()) |line| {
             const tab = std.mem.indexOfScalar(u8, line, '\t') orelse continue;
             const at = std.fmt.parseInt(i64, line[0..tab], 10) catch continue;
-            if (!exists(l.gpa, line[tab + 1 ..])) {
+            var bundle = line[tab + 1 ..];
+            var count: u32 = 0;
+            if (std.mem.indexOfScalar(u8, bundle, '\t')) |end| {
+                count = std.fmt.parseInt(u32, bundle[end + 1 ..], 10) catch 0;
+                bundle = bundle[0..end];
+            }
+            if (!exists(l.gpa, bundle)) {
                 gone = true;
                 continue;
             }
-            l.record(line[tab + 1 ..], at);
+            const u = l.entry(bundle) orelse continue;
+            u.at = @max(u.at, at);
+            u.picks = count;
         }
         l.dirty = gone;
     }
@@ -89,7 +122,7 @@ pub const Ledger = struct {
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(l.gpa);
         var it = l.seen.iterator();
-        while (it.next()) |e| try text.print(l.gpa, "{d}\t{s}\n", .{ e.value_ptr.*, e.key_ptr.* });
+        while (it.next()) |e| try text.print(l.gpa, "{d}\t{s}\t{d}\n", .{ e.value_ptr.at, e.key_ptr.*, e.value_ptr.picks });
         var parts = std.mem.splitScalar(u8, dir, '/');
         var sub: std.ArrayList(u8) = .empty;
         defer sub.deinit(l.gpa);

@@ -17,6 +17,7 @@ const view_card = @import("view_card.zig");
 const measure = @import("measure.zig");
 const info_plist = @import("plist.zig");
 const usage = @import("usage.zig");
+const fuzzy = @import("fuzzy.zig");
 const objc = nanoui.objc;
 
 extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
@@ -597,6 +598,135 @@ test "processes group under their outermost app" {
     try std.testing.expectEqual(@as(usize, 1), t.shown);
 }
 
+fn expectGroups(t: *const groups.Table, names: []const []const u8) !void {
+    errdefer for (t.groups.items) |g| std.debug.print("  group {s}\n", .{g.name});
+    try std.testing.expectEqual(names.len, t.groups.items.len);
+    for (names, t.groups.items) |n, g| try std.testing.expectEqualStrings(n, g.name);
+}
+
+test "searching processes ranks groups by match, and a picked app wins a tie" {
+    const tmp = try Tmp.make();
+    defer tmp.remove();
+    try tmp.sh("mkdir -p 'Twin A.app' 'Twin B.app'", .{});
+    var b1: [128]u8 = undefined;
+    var b2: [128]u8 = undefined;
+    const twin_a = try tmp.sub(&b1, "Twin A.app");
+    const twin_b = try tmp.sub(&b2, "Twin B.app");
+    const items = [_]procs.Proc{
+        .{ .pid = 1, .uid = 501, .name = "zsh", .memory = 900 },
+        .{ .pid = 2, .uid = 501, .name = "lemonaded", .memory = 800 },
+        .{ .pid = 3, .uid = 501, .name = "Activity Monitor", .bundle = "/Applications/Activity Monitor.app", .memory = 700 },
+        .{ .pid = 4, .uid = 501, .name = "monitorpro", .bundle = "/Applications/Monitor Pro.app", .memory = 100 },
+        .{ .pid = 5, .uid = 501, .name = "twin", .bundle = twin_a, .memory = 60 },
+        .{ .pid = 6, .uid = 501, .name = "twin", .bundle = twin_b, .memory = 50 },
+    };
+    var expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var t: groups.Table = .{ .gpa = gpa };
+    defer t.deinit();
+    try t.build(&items, .{ .show = .all, .uid = 501, .query = "mon" }, &expanded);
+    try expectGroups(&t, &.{ "Monitor Pro", "Activity Monitor", "lemonaded" });
+
+    var ledger: usage.Ledger = .{ .gpa = gpa, .home = tmp.path() };
+    defer ledger.deinit();
+    try t.build(&items, .{ .show = .all, .uid = 501, .query = "twin", .ledger = &ledger, .now = 10_000 }, &expanded);
+    try expectGroups(&t, &.{ "Twin A", "Twin B" });
+    ledger.pick(twin_b);
+    try t.build(&items, .{ .show = .all, .uid = 501, .query = "twin", .ledger = &ledger, .now = 10_000 }, &expanded);
+    try expectGroups(&t, &.{ "Twin B", "Twin A" });
+    try t.build(&items, .{ .show = .all, .uid = 501, .ledger = &ledger, .now = 10_000 }, &expanded);
+    try std.testing.expectEqualStrings("zsh", t.groups.items[0].name);
+}
+
+fn expectApps(a: *const App, names: []const []const u8) !void {
+    errdefer for (a.app_rows.items) |r| std.debug.print("  app {s}\n", .{a.inventory.apps.items[r].name});
+    try std.testing.expectEqual(names.len, a.app_rows.items.len);
+    for (names, a.app_rows.items) |n, r| try std.testing.expectEqualStrings(n, a.inventory.apps.items[r].name);
+}
+
+fn appIndex(a: *const App, name: []const u8) usize {
+    for (a.inventory.apps.items, 0..) |info, i| if (std.mem.eql(u8, info.name, name)) return i;
+    unreachable;
+}
+
+test "searching apps ranks the best match first, and a picked or recently run app wins a tie" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p 'Apps/Activity Monitor.app' 'Apps/Monitor Pro.app' Apps/Lemonade.app 'Apps/Twin A.app' 'Apps/Twin B.app' 'Apps/Mail One.app' 'Apps/Mail Two.app'", .{});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.inventory.sync = true;
+    a.inventory.load();
+    a.app_query.set("mon");
+    a.refresh();
+    try expectApps(&a, &.{ "Monitor Pro", "Activity Monitor", "Mail One", "Lemonade" });
+
+    a.app_query.set("twin");
+    a.refresh();
+    try expectApps(&a, &.{ "Twin A", "Twin B" });
+    a.selectApp(appIndex(&a, "Twin B"));
+    a.app_query.set("twi");
+    a.refresh();
+    try expectApps(&a, &.{ "Twin B", "Twin A" });
+
+    a.app_query.set("mail");
+    a.refresh();
+    try expectApps(&a, &.{ "Mail One", "Mail Two" });
+    a.usage.observe(&.{.{ .pid = 9, .uid = 501, .bundle = a.inventory.apps.items[appIndex(&a, "Mail Two")].path }}, a.now() - 60);
+    a.app_query.set("mai");
+    a.refresh();
+    try expectApps(&a, &.{ "Mail Two", "Mail One" });
+
+    a.app_query.clear();
+    a.refresh();
+    try expectApps(&a, &.{ "Activity Monitor", "Lemonade", "Mail One", "Mail Two", "Monitor Pro", "Twin A", "Twin B" });
+}
+
+fn expectRanked(query: []const u8, best_first: []const []const u8) !void {
+    for (best_first, 0..) |text, i| {
+        const s = fuzzy.score(query, text) orelse {
+            std.debug.print("\"{s}\" does not match \"{s}\"\n", .{ query, text });
+            return error.NoMatch;
+        };
+        if (i == 0) continue;
+        const above = fuzzy.score(query, best_first[i - 1]).?;
+        if (above <= s) {
+            std.debug.print("\"{s}\": \"{s}\" ({d}) should rank above \"{s}\" ({d})\n", .{ query, best_first[i - 1], above, text, s });
+            return error.WrongOrder;
+        }
+    }
+}
+
+test "the matcher ranks a prefix, then a word start, then a run inside a word, then scattered letters" {
+    try expectRanked("mon", &.{ "Monitor", "Activity Monitor", "Mail One", "Lemonade" });
+    try expectRanked("act", &.{ "Activity Monitor", "Contacts", "Raycast" });
+    try expectRanked("vsc", &.{ "Visual Studio Code", "Movies Scanner" });
+    try expectRanked("chrome", &.{ "Chrome", "Google Chrome", "Google Chrome Helper (Renderer)" });
+}
+
+test "the matcher ignores case and matches camel-case word starts" {
+    try std.testing.expect(fuzzy.score("SAFARI", "Safari") != null);
+    try expectRanked("wk", &.{ "WebKit", "awkward" });
+}
+
+test "the matcher tolerates a typo in queries of five letters or more, below an exact match" {
+    try std.testing.expect(fuzzy.score("twin", "Activity Monitor") == null);
+    try std.testing.expect(fuzzy.score("chorme", "Google Chrome") != null);
+    try std.testing.expect(fuzzy.score("sfaari", "Safari") != null);
+    try std.testing.expect(fuzzy.score("termnal", "Terminal") != null);
+    try std.testing.expect(fuzzy.score("tirminal", "Terminal") != null);
+    try expectRanked("notes", &.{ "Notes", "Nodes" });
+    try std.testing.expect(fuzzy.score("cx", "Chrome") == null);
+    try std.testing.expect(fuzzy.score("xcode", "Calculator") == null);
+    try std.testing.expect(fuzzy.score("chorme", "Calendar") == null);
+}
+
+test "the matcher matches an empty query to everything and nothing to an empty text" {
+    try std.testing.expect(fuzzy.score("", "Finder") != null);
+    try std.testing.expect(fuzzy.score("a", "") == null);
+}
+
 fn header64(cpu: u32) [32]u8 {
     var h: [32]u8 = @splat(0);
     std.mem.writeInt(u32, h[0..4], 0xfeedfacf, .little);
@@ -965,6 +1095,43 @@ test "app usage comes from process samples, survives a restart, and is unknown w
     try std.testing.expectEqual(@as(i64, 0), second.lastSeen(never));
     second.observe(&.{.{ .pid = 12, .uid = 0, .bundle = bar }}, 500);
     try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(bar));
+}
+
+test "the usage ledger keeps how often each app was picked across a save and reload" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Foo.app Bar.app Old.app 'Library/Application Support/nanokeep'", .{});
+    var b1: [128]u8 = undefined;
+    var b2: [128]u8 = undefined;
+    var b3: [128]u8 = undefined;
+    const foo = try t.sub(&b1, "Foo.app");
+    const bar = try t.sub(&b2, "Bar.app");
+    const old = try t.sub(&b3, "Old.app");
+    var first: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer first.deinit();
+    first.observe(&.{.{ .pid = 10, .uid = 0, .bundle = foo }}, 1_000);
+    first.pick(foo);
+    first.pick(foo);
+    first.pick(bar);
+    try std.testing.expectEqual(@as(u32, 2), first.picks(foo));
+    try std.testing.expect(first.dirty);
+    try first.save();
+
+    var second: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer second.deinit();
+    second.load();
+    try std.testing.expectEqual(@as(u32, 2), second.picks(foo));
+    try std.testing.expectEqual(@as(u32, 1), second.picks(bar));
+    try std.testing.expectEqual(@as(u32, 0), second.picks(old));
+    try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(foo));
+    try std.testing.expectEqual(@as(i64, 0), second.lastSeen(bar));
+
+    try t.sh("printf '700\\t%s\\n' '{s}' > 'Library/Application Support/nanokeep/usage.tsv'", .{old});
+    var third: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer third.deinit();
+    third.load();
+    try std.testing.expectEqual(@as(i64, 700), third.lastSeen(old));
+    try std.testing.expectEqual(@as(u32, 0), third.picks(old));
 }
 
 test "the Apps page shows when each app last ran, from the saved usage, and unknown otherwise" {

@@ -37,6 +37,8 @@ const budgets = [_]measure.Budget{
     .{ .name = "hover_rebuilds", .budget = 0, .target = 0 },
     .{ .name = "sample_p50_ms", .budget = 6, .target = 1.36 },
     .{ .name = "sample_p95_ms", .budget = 8, .target = 1.65 },
+    .{ .name = "keystroke_p50_ms", .budget = 0.5, .target = 0.01 },
+    .{ .name = "keystroke_p95_ms", .budget = 1, .target = 0.05 },
     .{ .name = "idle_mb", .budget = 70, .target = 40 },
     .{ .name = "idle_mean_mb", .budget = 140, .target = 40 },
     .{ .name = "scan_ms", .budget = 100, .target = 40 },
@@ -216,6 +218,28 @@ const Bench = struct {
         try b.putStats("sample", &times);
     }
 
+    fn keystrokes(b: *Bench) !void {
+        const typed = "actvity monitr";
+        const waited = seconds();
+        while (!b.a.inventory.loaded) {
+            if (seconds() - waited > 30) return error.InventoryNotLoaded;
+            pumpOnce(0.01);
+        }
+        var times: [5 * typed.len]f64 = undefined;
+        for (&times, 0..) |*s, k| {
+            const q = typed[0 .. k % typed.len + 1];
+            b.a.query.set(q);
+            b.a.app_query.set(q);
+            const t = seconds();
+            b.a.order();
+            b.a.orderApps();
+            s.* = ms(t);
+        }
+        b.a.query.clear();
+        b.a.app_query.clear();
+        try b.putStats("keystroke", &times);
+    }
+
     fn scan(b: *Bench) !f64 {
         b.a.page = .cleanup;
         const t = seconds();
@@ -361,6 +385,7 @@ pub fn main(init: std.process.Init) !void {
     const explained = (a.sampler.samples - sampled) + (a.apps_version - inventoried);
     try b.put("hover_rebuilds", @floatFromInt((a.rebuilds - rebuilt) -| explained));
     try b.sampling();
+    try b.keystrokes();
     const idle = try b.idle();
     try b.put("idle_mb", mb(idle.floor));
     try b.put("idle_mean_mb", idle.mean / (1 << 20));

@@ -1,5 +1,7 @@
 const std = @import("std");
 const procs = @import("procs.zig");
+const fuzzy = @import("fuzzy.zig");
+const usage = @import("usage.zig");
 const Proc = procs.Proc;
 
 pub const Show = enum { all, apps, mine, system };
@@ -21,6 +23,7 @@ pub const Group = struct {
     time_ns: u64 = 0,
     energy: f32 = 0,
     known: bool = false,
+    rank: i32 = std.math.minInt(i32),
 };
 
 pub const Row = struct { group: u32, member: ?u32 = null };
@@ -31,6 +34,8 @@ pub const Options = struct {
     reversed: bool = false,
     query: []const u8 = "",
     uid: u32 = 0,
+    ledger: ?*const usage.Ledger = null,
+    now: i64 = 0,
 };
 
 pub fn keyOf(p: *const Proc) u64 {
@@ -38,14 +43,19 @@ pub fn keyOf(p: *const Proc) u64 {
 }
 
 fn shown(p: *const Proc, o: Options) bool {
-    switch (o.show) {
-        .all => {},
-        .apps => if (p.bundle.len == 0) return false,
-        .mine => if (p.uid != o.uid) return false,
-        .system => if (p.uid == o.uid) return false,
-    }
-    if (o.query.len == 0) return true;
-    return std.ascii.findIgnoreCase(p.name, o.query) != null or std.ascii.findIgnoreCase(p.bundle, o.query) != null;
+    return switch (o.show) {
+        .all => true,
+        .apps => p.bundle.len > 0,
+        .mine => p.uid == o.uid,
+        .system => p.uid != o.uid,
+    };
+}
+
+fn match(p: *const Proc, query: []const u8) ?i32 {
+    const by_name = fuzzy.score(query, p.name);
+    const by_app = if (p.bundle.len > 0) fuzzy.score(query, appName(p.bundle)) else null;
+    if (by_name == null) return by_app;
+    return @max(by_name.?, by_app orelse by_name.?);
 }
 
 pub const Table = struct {
@@ -53,9 +63,11 @@ pub const Table = struct {
     groups: std.ArrayList(Group) = .empty,
     members: std.ArrayList(u32) = .empty,
     rows: std.ArrayList(Row) = .empty,
+    ranks: std.ArrayList(i32) = .empty,
     shown: usize = 0,
 
     pub fn deinit(t: *Table) void {
+        t.ranks.deinit(t.gpa);
         t.groups.deinit(t.gpa);
         t.members.deinit(t.gpa);
         t.rows.deinit(t.gpa);
@@ -68,7 +80,12 @@ pub const Table = struct {
         t.shown = 0;
         var picked: std.ArrayList(u32) = .empty;
         defer picked.deinit(t.gpa);
-        for (items, 0..) |*p, i| if (shown(p, o)) try picked.append(t.gpa, @intCast(i));
+        try t.ranks.resize(t.gpa, items.len);
+        for (items, 0..) |*p, i| {
+            if (!shown(p, o)) continue;
+            if (o.query.len > 0) t.ranks.items[i] = match(p, o.query) orelse continue;
+            try picked.append(t.gpa, @intCast(i));
+        }
         t.shown = picked.items.len;
         const Ctx = struct {
             items: []const Proc,
@@ -105,7 +122,13 @@ pub const Table = struct {
             g.energy += p.energy;
             g.known = g.known or p.known;
             if (p.pid < g.pid) g.pid = p.pid;
+            if (o.query.len > 0) g.rank = @max(g.rank, t.ranks.items[i]);
         }
+        if (o.query.len > 0) if (o.ledger) |l| {
+            for (t.groups.items) |*g| if (g.bundle.len > 0) {
+                g.rank += l.boost(g.bundle, o.now);
+            };
+        };
         std.mem.sort(Group, t.groups.items, o, groupLess);
         for (t.groups.items, 0..) |g, gi| {
             try t.rows.append(t.gpa, .{ .group = @intCast(gi) });
@@ -130,6 +153,7 @@ fn before(cpu_a: f32, mem_a: u64, cpu_b: f32, mem_b: u64, o: Options) bool {
 }
 
 fn groupLess(o: Options, a: Group, b: Group) bool {
+    if (a.rank != b.rank) return a.rank > b.rank;
     const ord: std.math.Order = switch (o.sort) {
         .name => std.ascii.orderIgnoreCase(a.name, b.name),
         .user => std.ascii.orderIgnoreCase(a.user, b.user),

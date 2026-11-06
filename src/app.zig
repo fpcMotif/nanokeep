@@ -4,6 +4,7 @@ const procs = @import("procs.zig");
 const groups = @import("groups.zig");
 const cleaner = @import("cleaner.zig");
 const apps = @import("apps.zig");
+const fuzzy = @import("fuzzy.zig");
 const fda = @import("fda.zig");
 const metrics = @import("metrics.zig");
 const machine = @import("machine.zig");
@@ -78,6 +79,7 @@ pub const App = struct {
     app_sort: AppSort = .name,
     app_reversed: bool = false,
     app_rows: std.ArrayList(u32) = .empty,
+    app_ranks: std.ArrayList(i32) = .empty,
     app_selected: ?usize = null,
     confirm_uninstall: bool = false,
     rebuilds: usize = 0,
@@ -118,6 +120,7 @@ pub const App = struct {
         a.metrics.deinit();
         a.everyone.deinit();
         a.app_rows.deinit(a.gpa);
+        a.app_ranks.deinit(a.gpa);
         a.expanded_groups.deinit(a.gpa);
         a.table.deinit();
         a.toaster.deinit();
@@ -221,7 +224,28 @@ pub const App = struct {
             .reversed = a.reversed,
             .query = std.mem.trim(u8, a.query.text(), " "),
             .uid = a.sampler.uid,
+            .ledger = &a.usage,
+            .now = a.now(),
         }, &a.expanded_groups) catch {};
+    }
+
+    pub fn selectRow(a: *App, g: *const groups.Group, pid: ?i32) void {
+        const s: Selection = .{ .group = g.key, .pid = pid };
+        if (a.selected != null and std.meta.eql(a.selected.?, s)) {
+            a.selected = null;
+            return;
+        }
+        a.selected = s;
+        a.usage.pick(g.bundle);
+    }
+
+    pub fn selectApp(a: *App, index: usize) void {
+        if (a.app_selected == index) {
+            a.app_selected = null;
+            return;
+        }
+        a.app_selected = index;
+        a.usage.pick(a.inventory.apps.items[index].path);
     }
 
     pub fn sortBy(a: *App, s: groups.Sort) void {
@@ -242,15 +266,20 @@ pub const App = struct {
         a.apps_key = a.appsKey();
         a.app_rows.clearRetainingCapacity();
         const q = std.mem.trim(u8, a.app_query.text(), " ");
-        for (a.inventory.apps.items, 0..) |info, i| {
-            if (q.len > 0 and std.ascii.findIgnoreCase(info.name, q) == null) continue;
+        a.app_ranks.resize(a.gpa, a.inventory.apps.items.len) catch return;
+        const t = a.now();
+        for (a.inventory.apps.items, a.app_ranks.items, 0..) |info, *rank, i| {
+            rank.* = 0;
+            if (q.len > 0) rank.* = (fuzzy.score(q, info.name) orelse continue) + a.usage.boost(info.path, t);
             a.app_rows.append(a.gpa, @intCast(i)) catch return;
         }
         const Ctx = struct {
             list: []const apps.AppInfo,
+            ranks: []const i32,
             sort: AppSort,
             reversed: bool,
             fn lt(c: @This(), x: u32, y: u32) bool {
+                if (c.ranks[x] != c.ranks[y]) return c.ranks[x] > c.ranks[y];
                 const p = c.list[x];
                 const q2 = c.list[y];
                 const ord: std.math.Order = switch (c.sort) {
@@ -265,7 +294,7 @@ pub const App = struct {
                 return if (c.reversed) ord == .gt else ord == .lt;
             }
         };
-        std.mem.sort(u32, a.app_rows.items, Ctx{ .list = a.inventory.apps.items, .sort = a.app_sort, .reversed = a.app_reversed }, Ctx.lt);
+        std.mem.sort(u32, a.app_rows.items, Ctx{ .list = a.inventory.apps.items, .ranks = a.app_ranks.items, .sort = a.app_sort, .reversed = a.app_reversed }, Ctx.lt);
     }
 
     pub fn sortAppsBy(a: *App, s: AppSort) void {

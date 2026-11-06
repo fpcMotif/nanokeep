@@ -79,7 +79,7 @@ fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
         }
     } else _ = c.leaf(.{ .width = .{ .px = 18 } }, .none, null);
     if (it.clicked and !c.changed) {
-        a.selected = if (sel) null else .{ .group = g.key, .pid = if (p) |pp| pp.pid else null };
+        a.selectRow(g, if (p) |pp| pp.pid else null);
         c.changed = true;
     }
     if (it.double_clicked and p == null and g.count > 1) a.toggleGroup(g.key);
