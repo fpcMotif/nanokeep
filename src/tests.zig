@@ -149,6 +149,88 @@ test "the walker measures a tree deeper than a recursive walk could hold" {
     try std.testing.expectEqual(@as(u64, 1), got.files);
 }
 
+test "a repeat walk reuses unchanged folders and lists only the folders that changed" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p a b/c d/e/f && for f in 1 2 3; do printf x > a/$f; done && dd if=/dev/urandom of=b/c/one bs=4096 count=4 2>/dev/null && printf y > d/e/f/deep", .{});
+    var first = walk.measureAgain(gpa, t.path().ptr, null, walk.max_nodes);
+    defer if (first.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 7), first.listed);
+    try std.testing.expectEqual(try duBytes(t.path()), first.size.bytes);
+
+    var second = walk.measureAgain(gpa, t.path().ptr, &first.tree.?, walk.max_nodes);
+    defer if (second.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 0), second.listed);
+    try std.testing.expectEqual(first.size.bytes, second.size.bytes);
+    try std.testing.expectEqual(first.size.files, second.size.files);
+    try std.testing.expectEqual(first.size.newest, second.size.newest);
+
+    try t.sh("dd if=/dev/urandom of=b/c/two bs=4096 count=9 2>/dev/null && mkdir a/new && printf z > a/new/file", .{});
+    var third = walk.measureAgain(gpa, t.path().ptr, &second.tree.?, walk.max_nodes);
+    defer if (third.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 3), third.listed);
+    try std.testing.expectEqual(try duBytes(t.path()), third.size.bytes);
+    try std.testing.expectEqual(try uniqueFiles(t.path()), third.size.files);
+    try std.testing.expectEqual(try newestTime(t.path()), @as(u64, @intCast(third.size.newest)));
+}
+
+test "a repeat walk of a tree deeper than one path can name reuses it and sees a change at the bottom" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("for i in $(seq 600); do mkdir d; cd d; done; printf x > bottom", .{});
+    var first = walk.measureAgain(gpa, t.path().ptr, null, walk.max_nodes);
+    defer if (first.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 601), first.listed);
+    try std.testing.expectEqual(@as(u64, 4096), first.size.bytes);
+    var second = walk.measureAgain(gpa, t.path().ptr, &first.tree.?, walk.max_nodes);
+    defer if (second.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 0), second.listed);
+    try std.testing.expectEqual(first.size.bytes, second.size.bytes);
+    try std.testing.expectEqual(@as(u64, 1), second.size.files);
+    try t.sh("for i in $(seq 600); do cd d; done; dd if=/dev/urandom of=more bs=4096 count=5 2>/dev/null", .{});
+    var third = walk.measureAgain(gpa, t.path().ptr, &second.tree.?, walk.max_nodes);
+    defer if (third.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 1), third.listed);
+    try std.testing.expectEqual(@as(u64, 4096 + 5 * 4096), third.size.bytes);
+    try std.testing.expectEqual(@as(u64, 2), third.size.files);
+}
+
+test "a repeat walk counts a file hard-linked from an unchanged and a changed folder once" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir a b && dd if=/dev/urandom of=a/x bs=4096 count=6 2>/dev/null && ln a/x b/x", .{});
+    var first = walk.measureAgain(gpa, t.path().ptr, null, walk.max_nodes);
+    defer if (first.tree) |*tr| tr.deinit(gpa);
+    try t.sh("printf y > b/new", .{});
+    var second = walk.measureAgain(gpa, t.path().ptr, &first.tree.?, walk.max_nodes);
+    defer if (second.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(try duBytes(t.path()), second.size.bytes);
+    try std.testing.expectEqual(try uniqueFiles(t.path()), second.size.files);
+}
+
+test "the scan cache keeps trees only while their folders fit in its bound" {
+    var cache: walk.Cache = .{};
+    defer cache.deinit(gpa);
+    const half = walk.max_nodes / 2 + 1;
+    for ([_][]const u8{ "/first", "/second" }) |p| {
+        const nodes = try gpa.alloc(walk.Node, half);
+        @memset(nodes, .{ .mtime = 0, .name_at = 0, .name_len = 0 });
+        cache.put(gpa, p, .{ .nodes = nodes, .names = try gpa.alloc(u8, 0) });
+    }
+    try std.testing.expect(cache.get("/first") != null);
+    try std.testing.expect(cache.get("/second") == null);
+}
+
+test "a walk over more folders than the cache holds records nothing and still measures right" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p a b/c d/e/f && printf x > a/1 && printf y > d/e/f/deep", .{});
+    const m = walk.measureAgain(gpa, t.path().ptr, null, 3);
+    try std.testing.expect(m.tree == null);
+    try std.testing.expectEqual(try duBytes(t.path()), m.size.bytes);
+    try std.testing.expectEqual(@as(u64, 2), m.size.files);
+}
+
 const plist_keys = [_][]const u8{ "CFBundleDisplayName", "CFBundleName", "CFBundleShortVersionString", "CFBundleVersion", "CFBundleIdentifier", "CFBundleExecutable" };
 
 fn expectPlistLikePlutil(file: [:0]const u8) !void {
@@ -367,6 +449,48 @@ test "cleaning trashes only selected categories, and stale temporary files only"
     }
     try std.testing.expect(saw_cache and saw_temp);
     try std.testing.expect(cl.last.?.moved >= 20 * 4096);
+}
+
+test "a repeat scan lists no unchanged folder, and a change shows in the next scan" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p home/Library/Caches/com.vendor.app/data tmp && dd if=/dev/urandom of=home/Library/Caches/com.vendor.app/data/blob bs=4096 count=20 2>/dev/null", .{});
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.sync = true;
+    const caches = &cl.cats[@intFromEnum(cleaner.Kind.caches)];
+    cl.scan();
+    const first = caches.bytes();
+    try std.testing.expect(cl.listed > 0);
+    cl.scan();
+    try std.testing.expectEqual(@as(u64, 0), cl.listed);
+    try std.testing.expectEqual(first, caches.bytes());
+    try t.sh("dd if=/dev/urandom of=home/Library/Caches/com.vendor.app/data/more bs=4096 count=7 2>/dev/null", .{});
+    cl.scan();
+    try std.testing.expectEqual(@as(u64, 1), cl.listed);
+    var cb: [160]u8 = undefined;
+    try std.testing.expectEqual(try duBytes(try t.sub(&cb, "home/Library/Caches/com.vendor.app")), caches.bytes());
+    try std.testing.expectEqual(@as(u64, 2), caches.files());
+}
+
+test "a file rewritten in place inside an old temporary folder keeps that folder out of the next scan" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p home tmp/old/inner && printf o > tmp/old/inner/file && touch -t 202001010000 tmp/old/inner/file tmp/old/inner tmp/old", .{});
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.sync = true;
+    const temp = &cl.cats[@intFromEnum(cleaner.Kind.temporary)];
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 1), temp.items().len);
+    try std.testing.expect(std.mem.endsWith(u8, temp.items()[0].path, "tmp/old"));
+    try t.sh("printf n > tmp/old/inner/file", .{});
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 0), temp.items().len);
 }
 
 test "cleaning the developer category removes clean worktrees with git" {

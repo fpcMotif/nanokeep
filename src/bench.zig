@@ -41,7 +41,7 @@ const budgets = [_]measure.Budget{
     .{ .name = "idle_mean_mb", .budget = 140, .target = 40 },
     .{ .name = "scan_ms", .budget = 100, .target = 40 },
     .{ .name = "scan_peak_mb", .budget = 303, .target = 60 },
-    .{ .name = "repeat_scan_ms", .budget = 61, .target = 1.4 },
+    .{ .name = "repeat_scan_ms", .budget = 25, .target = 1.4 },
     .{ .name = "hidden_mb", .budget = 55, .target = 20 },
     .{ .name = "show_ms", .budget = 375, .target = 2.9 },
     .{ .name = "cycle_growth_mb", .budget = 3, .target = 2 },
@@ -222,7 +222,7 @@ const Bench = struct {
         b.a.cleaner.scan();
         while (b.a.cleaner.job != null) {
             if (seconds() - t > 300) return error.ScanTimedOut;
-            pumpOnce(0.01);
+            pumpOnce(0.001);
         }
         if (!b.a.cleaner.scanned) return error.ScanIncomplete;
         return ms(t);

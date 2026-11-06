@@ -149,29 +149,36 @@ pub const Env = struct { home: []const u8, tmpdir: []const u8, now: i64 };
 pub const Progress = struct {
     stop: std.atomic.Value(bool) = .init(false),
     measured: std.atomic.Value(u64) = .init(0),
+    listed: std.atomic.Value(u64) = .init(0),
 };
 
-pub fn gather(gpa: std.mem.Allocator, env: Env, lists: *[specs.len]Gathered) void {
-    var progress: Progress = .{};
-    for (lists, &specs) |*g, *spec| measureCategory(gpa, env, g, spec, &progress);
-}
+pub const Caches = struct { old: *const walk.Cache, new: *walk.Cache };
 
-pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *const Spec, progress: *Progress) void {
+pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *const Spec, progress: *Progress, caches: Caches) void {
     for (spec.sources) |src| listSource(gpa, env, g, src) catch {};
-    var paths: std.ArrayList([:0]const u8) = .empty;
-    defer paths.deinit(gpa);
-    for (g.items.items) |it| paths.append(gpa, it.path) catch return;
-    const out = gpa.alloc(walk.Size, paths.items.len) catch return;
-    defer gpa.free(out);
-    @memset(out, .{});
-    var pool: walk.Pool = .{ .gpa = gpa, .paths = paths.items, .out = out, .stop = &progress.stop, .measured = &progress.measured };
-    pool.run();
-    for (g.items.items, out) |*it, size| it.size = size;
     const age: ?i64 = switch (spec.kind) {
         .temporary => stale_seconds,
         .agents => session_age,
         else => null,
     };
+    const n = g.items.items.len;
+    const cached = if (age == null) n else 0;
+    const paths = gpa.alloc([:0]const u8, n) catch return;
+    defer gpa.free(paths);
+    const prev = gpa.alloc(?*const walk.Tree, cached) catch return;
+    defer gpa.free(prev);
+    const trees = gpa.alloc(?walk.Tree, cached) catch return;
+    defer gpa.free(trees);
+    @memset(trees, null);
+    for (g.items.items, paths) |it, *p| p.* = it.path;
+    for (paths[0..cached], prev) |p, *t| t.* = caches.old.get(p);
+    const out = gpa.alloc(walk.Size, n) catch return;
+    defer gpa.free(out);
+    @memset(out, .{});
+    var pool: walk.Pool = .{ .gpa = gpa, .paths = paths, .out = out, .stop = &progress.stop, .measured = &progress.measured, .listed = &progress.listed, .prev = prev, .trees = trees };
+    pool.run();
+    for (paths[0..cached], trees) |p, t| if (t) |tree| caches.new.put(gpa, p, tree);
+    for (g.items.items, out) |*it, size| it.size = size;
     if (age) |min_age| {
         var k: usize = 0;
         while (k < g.items.items.len) {
@@ -293,6 +300,7 @@ const Job = struct {
     thread: ?std.Thread = null,
     progress: Progress = .{},
     done: std.atomic.Value(usize) = .init(0),
+    cache: walk.Cache = .{},
 
     fn work(j: *Job) void {
         j.execute(true);
@@ -306,7 +314,7 @@ const Job = struct {
         }
         for (&j.lists, &specs, 0..) |*g, *spec, i| {
             if (j.progress.stop.load(.monotonic)) return;
-            measureCategory(j.cl.gpa, j.env, g, spec, &j.progress);
+            measureCategory(j.cl.gpa, j.env, g, spec, &j.progress, .{ .old = &j.cl.cache, .new = &j.cache });
             if (j.progress.stop.load(.monotonic)) return;
             j.done.store(i + 1, .release);
             if (threaded) objc.dispatchMain(j, stepped);
@@ -334,6 +342,7 @@ const Job = struct {
             if (a.repo) |r| gpa.free(r);
         }
         gpa.free(j.actions);
+        j.cache.deinit(gpa);
         gpa.destroy(j);
     }
 };
@@ -348,6 +357,8 @@ pub const Cleaner = struct {
     scanned_at: i64 = 0,
     started: u64 = 0,
     scan_ms: u64 = 0,
+    listed: u64 = 0,
+    cache: walk.Cache = .{},
     applied: usize = 0,
     cancelled: bool = false,
     last: ?Result = null,
@@ -373,6 +384,7 @@ pub const Cleaner = struct {
             cat.found.clear(cl.gpa);
             cat.found.items.deinit(cl.gpa);
         }
+        cl.cache.deinit(cl.gpa);
     }
 
     pub fn total(cl: *const Cleaner) u64 {
@@ -498,9 +510,11 @@ pub const Cleaner = struct {
         }
         cl.apply(j);
         cl.scan_ms = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) -| cl.started) / std.time.ns_per_ms;
+        cl.listed = j.progress.listed.load(.monotonic);
         if (cl.applied == specs.len) {
             cl.scanned = true;
             cl.scanned_at = j.env.now;
+            std.mem.swap(walk.Cache, &cl.cache, &j.cache);
         }
         j.destroy(cl.gpa);
         cl.tell();
