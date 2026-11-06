@@ -27,6 +27,13 @@ const budgets = [_]measure.Budget{
     .{ .name = "hover_p95_ms", .budget = 17, .target = 0.29 },
     .{ .name = "scroll_p50_ms", .budget = 9, .target = 0.28 },
     .{ .name = "scroll_p95_ms", .budget = 17, .target = 0.28 },
+    .{ .name = "page_switch_cpu_p50_ms", .budget = 2.1, .target = 0.28 },
+    .{ .name = "page_switch_cpu_p95_ms", .budget = 10.7, .target = 0.28 },
+    .{ .name = "hover_cpu_p50_ms", .budget = 0.33, .target = 0.28 },
+    .{ .name = "hover_cpu_p95_ms", .budget = 0.5, .target = 0.29 },
+    .{ .name = "scroll_cpu_p50_ms", .budget = 0.45, .target = 0.28 },
+    .{ .name = "scroll_cpu_p95_ms", .budget = 1.8, .target = 0.28 },
+    .{ .name = "hover_rebuilds", .budget = 0, .target = 0 },
     .{ .name = "sample_p50_ms", .budget = 52, .target = 1.36 },
     .{ .name = "sample_p95_ms", .budget = 58, .target = 1.65 },
     .{ .name = "idle_mb", .budget = 300, .target = 40 },
@@ -46,6 +53,13 @@ const deep_levels = 120;
 const occlusion_visible = 2;
 const assertion_on = 255;
 const can_join_all_spaces = 1;
+
+extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
+const CLOCK_THREAD_CPUTIME_ID = 16;
+
+fn threadCpu() f64 {
+    return @as(f64, @floatFromInt(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID))) / 1e9;
+}
 
 fn ms(since: f64) f64 {
     return (seconds() - since) * 1000;
@@ -101,12 +115,15 @@ const Bench = struct {
         return objc.msg(objc.NSUInteger, b.window.nswindow, "occlusionState", .{}) & occlusion_visible != 0;
     }
 
-    fn timedFrame(b: *Bench) !f64 {
+    const Timed = struct { wall: f64, cpu: f64 };
+
+    fn timedFrame(b: *Bench) !Timed {
         const covered = seconds();
         while (true) {
             const t = seconds();
+            const cpu = threadCpu();
             b.surface().frame();
-            const took = ms(t);
+            const took: Timed = .{ .wall = ms(t), .cpu = (threadCpu() - cpu) * 1000 };
             pumpOnce(0);
             if (!b.surface().pending) return took;
             if (seconds() - covered > 30) return occluded(error.WindowOccluded);
@@ -114,29 +131,40 @@ const Bench = struct {
         }
     }
 
+    fn putFrames(b: *Bench, comptime name: []const u8, frames: []Timed) !void {
+        var wall: [256]f64 = undefined;
+        var cpu: [256]f64 = undefined;
+        for (frames, 0..) |f, i| {
+            wall[i] = f.wall;
+            cpu[i] = f.cpu;
+        }
+        try b.putStats(name, wall[0..frames.len]);
+        try b.putStats(name ++ "_cpu", cpu[0..frames.len]);
+    }
+
     fn pageSwitches(b: *Bench) !void {
-        var samples: [pages.len * 3]f64 = undefined;
+        var frames: [pages.len * 3]Timed = undefined;
         var n: usize = 0;
         for (0..3) |_| for (pages) |p| {
             b.a.page = p;
-            samples[n] = try b.timedFrame();
+            frames[n] = try b.timedFrame();
             n += 1;
         };
-        try b.putStats("page_switch", samples[0..n]);
+        try b.putFrames("page_switch", frames[0..n]);
     }
 
     fn hovers(b: *Bench) !void {
         b.a.page = .processes;
         _ = try b.timedFrame();
         const ctx = &b.surface().ctx;
-        var samples: [2 * 70]f64 = undefined;
-        for (&samples, 0..) |*s, i| {
+        var frames: [2 * 70]Timed = undefined;
+        for (&frames, 0..) |*f, i| {
             const row: f32 = @floatFromInt(i % 70);
             ctx.input.mouse = .{ .x = 640, .y = 150 + row * 8 };
             ctx.updateHot();
-            s.* = try b.timedFrame();
+            f.* = try b.timedFrame();
         }
-        try b.putStats("hover", &samples);
+        try b.putFrames("hover", &frames);
     }
 
     fn scrolls(b: *Bench) !void {
@@ -145,13 +173,13 @@ const Bench = struct {
         const ctx = &b.surface().ctx;
         ctx.input.mouse = .{ .x = 640, .y = 420 };
         ctx.updateHot();
-        var samples: [60]f64 = undefined;
-        for (&samples, 0..) |*s, i| {
+        var frames: [60]Timed = undefined;
+        for (&frames, 0..) |*f, i| {
             const dy: f32 = if (i < 30) -40 else 40;
             if (!ctx.applyScroll(dy)) ctx.input.scroll = .{ .y = dy };
-            s.* = try b.timedFrame();
+            f.* = try b.timedFrame();
         }
-        try b.putStats("scroll", &samples);
+        try b.putFrames("scroll", &frames);
     }
 
     fn sampling(b: *Bench) !void {
@@ -300,8 +328,15 @@ pub fn main(init: std.process.Init) !void {
     }
     pump(1);
     try b.pageSwitches();
+    a.page = .processes;
+    _ = try b.timedFrame();
+    const rebuilt = a.rebuilds;
+    const sampled = a.sampler.samples;
+    const inventoried = a.apps_version;
     try b.hovers();
     try b.scrolls();
+    const explained = (a.sampler.samples - sampled) + (a.apps_version - inventoried);
+    try b.put("hover_rebuilds", @floatFromInt((a.rebuilds - rebuilt) -| explained));
     try b.sampling();
     a.page = .overview;
     pump(6);

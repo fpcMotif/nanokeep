@@ -77,6 +77,11 @@ pub const App = struct {
     app_rows: std.ArrayList(u32) = .empty,
     app_selected: ?usize = null,
     confirm_uninstall: bool = false,
+    rebuilds: usize = 0,
+    table_key: u64 = 0,
+    apps_key: u64 = 0,
+    apps_version: u64 = 0,
+    expanded_version: u64 = 0,
     window: ?*nanoui.Window = null,
     clock: ?*const fn () f64 = null,
     send: *const fn (c_int, c_int) callconv(.c) c_int = procs.sendKill,
@@ -99,7 +104,7 @@ pub const App = struct {
 
     pub fn listen(a: *App) void {
         a.cleaner.on_change = .{ .ctx = a, .func = changed };
-        a.inventory.on_change = .{ .ctx = a, .func = changed };
+        a.inventory.on_change = .{ .ctx = a, .func = inventoryChanged };
         a.machine.on_change = .{ .ctx = a, .func = redraw };
     }
 
@@ -125,6 +130,12 @@ pub const App = struct {
         const a: *App = @ptrCast(@alignCast(ctx));
         a.reportClean();
         if (a.window) |w| w.redraw();
+    }
+
+    fn inventoryChanged(ctx: *anyopaque) void {
+        const a: *App = @ptrCast(@alignCast(ctx));
+        a.apps_version += 1;
+        changed(ctx);
     }
 
     fn redraw(ctx: *anyopaque) void {
@@ -154,11 +165,32 @@ pub const App = struct {
             a.last = t;
             if (a.sampler.samples == 1) a.last = t - interval + 0.6;
         }
-        a.order();
+        a.refresh();
         return @floatCast(@max(0.05, interval - (t - a.last)));
     }
 
+    pub fn refresh(a: *App) void {
+        if (a.tableKey() != a.table_key) a.order();
+        if (a.appsKey() != a.apps_key) a.orderApps();
+    }
+
+    fn tableKey(a: *const App) u64 {
+        var h: std.hash.Wyhash = .init(0);
+        h.update(std.mem.asBytes(&[_]u64{ a.sampler.samples, a.sampler.procs.items.len, a.show, @intFromEnum(a.sort), @intFromBool(a.reversed), a.expanded_version }));
+        h.update(std.mem.trim(u8, a.query.text(), " "));
+        return h.final();
+    }
+
+    fn appsKey(a: *const App) u64 {
+        var h: std.hash.Wyhash = .init(0);
+        h.update(std.mem.asBytes(&[_]u64{ a.apps_version, @intFromEnum(a.app_sort), @intFromBool(a.app_reversed) }));
+        h.update(std.mem.trim(u8, a.app_query.text(), " "));
+        return h.final();
+    }
+
     pub fn order(a: *App) void {
+        a.rebuilds += 1;
+        a.table_key = a.tableKey();
         a.table.build(a.sampler.procs.items, .{
             .show = @enumFromInt(a.show),
             .sort = a.sort,
@@ -166,7 +198,6 @@ pub const App = struct {
             .query = std.mem.trim(u8, a.query.text(), " "),
             .uid = a.sampler.uid,
         }, &a.expanded_groups) catch {};
-        a.orderApps();
     }
 
     pub fn sortBy(a: *App, s: groups.Sort) void {
@@ -177,11 +208,14 @@ pub const App = struct {
     }
 
     pub fn toggleGroup(a: *App, key: u64) void {
+        a.expanded_version += 1;
         if (a.expanded_groups.remove(key)) return;
         a.expanded_groups.put(a.gpa, key, {}) catch {};
     }
 
     pub fn orderApps(a: *App) void {
+        a.rebuilds += 1;
+        a.apps_key = a.appsKey();
         a.app_rows.clearRetainingCapacity();
         const q = std.mem.trim(u8, a.app_query.text(), " ");
         for (a.inventory.apps.items, 0..) |info, i| {

@@ -795,6 +795,86 @@ fn shotTo(tester: *ui.Tester, name: []const u8) !void {
     try tester.screenshot(try std.fmt.bufPrint(&pb, "{s}/{s}.png", .{ std.mem.span(dir), name }));
 }
 
+const second_plist =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<plist version="1.0"><dict>
+    \\<key>CFBundleName</key><string>Second Tool</string>
+    \\<key>CFBundleExecutable</key><string>fake</string>
+    \\<key>CFBundleIdentifier</key><string>dev.nanokeep.second</string>
+    \\</dict></plist>
+;
+
+test "hovering rebuilds no table, and each change to what a table shows rebuilds it" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist", .{plist});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.clock = fakeClock;
+    a.inventory.sync = true;
+    a.machine.read();
+    a.inventory.load();
+    a.sampler.sample(0);
+    a.last = 1e9;
+    a.page = .processes;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(1240, 820);
+    tester.settle(1);
+
+    const still = a.rebuilds;
+    for (0..40) |i| tester.moveTo(640, 150 + @as(f32, @floatFromInt(i)) * 12);
+    try std.testing.expectEqual(still, a.rebuilds);
+
+    a.query.set("zz-no-such-process");
+    tester.frame();
+    try std.testing.expectEqual(@as(usize, 0), a.table.rows.items.len);
+    a.query.clear();
+    tester.frame();
+    try std.testing.expect(a.table.rows.items.len > 0);
+
+    const mine = a.table.rows.items.len;
+    a.show = @intFromEnum(groups.Show.all);
+    tester.frame();
+    const everyone = a.table.rows.items.len;
+    try std.testing.expect(everyone > mine);
+    a.sortBy(.name);
+    tester.frame();
+    const first = a.table.groups.items[a.table.rows.items[0].group].name;
+    for (a.table.rows.items[1..]) |r| try std.testing.expect(std.ascii.orderIgnoreCase(first, a.table.groups.items[r.group].name) != .gt);
+    a.sortBy(.name);
+    tester.frame();
+    const last = a.table.groups.items[a.table.rows.items[0].group].name;
+    for (a.table.rows.items[1..]) |r| try std.testing.expect(std.ascii.orderIgnoreCase(last, a.table.groups.items[r.group].name) != .lt);
+    for (a.table.groups.items) |g| if (g.count > 1) {
+        a.toggleGroup(g.key);
+        break;
+    };
+    tester.frame();
+    try std.testing.expect(a.table.rows.items.len > everyone);
+
+    const before = a.rebuilds;
+    a.last = -1e9;
+    tester.frame();
+    try std.testing.expect(a.sampler.samples == 2 and a.rebuilds > before);
+
+    a.page = .apps;
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Fake Tool"));
+    a.app_query.set("Second");
+    tester.settle(1);
+    try std.testing.expectEqual(@as(usize, 0), a.app_rows.items.len);
+    try t.sh("rm -rf Apps/Fake.app && mkdir -p Apps/Second.app/Contents/MacOS && cp /usr/bin/true Apps/Second.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Second.app/Contents/Info.plist", .{second_plist});
+    a.inventory.load();
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Second Tool"));
+    try std.testing.expect(!tester.hasText("Fake Tool"));
+}
+
 test "the bench reads this process's physical footprint and its peak since a reset" {
     const before = measure.footprint();
     try std.testing.expect(before.now > 1 << 20);
