@@ -13,6 +13,7 @@ const usage = @import("usage.zig");
 extern "c" fn time(t: ?*i64) i64;
 
 pub const interval = 2.0;
+pub const hidden_interval = 10.0;
 
 pub const Page = enum { overview, processes, cpu, memory, gpu, disk, network, energy, apps, cleanup, about };
 
@@ -173,17 +174,23 @@ pub const App = struct {
     }
 
     pub fn tick(a: *App, t: f64) f32 {
-        if (a.live and t - a.last >= interval) {
-            a.sampler.sample(t);
-            a.metrics.sample(t, a.sampler.system.power);
-            a.awake_count = iokit.assertions(&a.awake);
-            a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
-            a.noteUsage();
-            a.last = t;
-            if (a.sampler.samples == 1) a.last = t - interval + 0.6;
-        }
+        if (a.live and t - a.last >= interval) a.sample(t);
         a.refresh();
         return @floatCast(@max(0.05, interval - (t - a.last)));
+    }
+
+    pub fn heartbeat(a: *App, t: f64) void {
+        if (a.live and t - a.last >= hidden_interval) a.sample(t);
+    }
+
+    fn sample(a: *App, t: f64) void {
+        a.sampler.sample(t);
+        a.metrics.sample(t, a.sampler.system.power);
+        a.awake_count = iokit.assertions(&a.awake);
+        a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
+        a.noteUsage();
+        a.last = t;
+        if (a.sampler.samples == 1) a.last = t - interval + 0.6;
     }
 
     pub fn refresh(a: *App) void {

@@ -917,6 +917,71 @@ fn fakeClock() f64 {
     return 0;
 }
 
+fn procNamed(s: *const procs.Sampler, name: []const u8) ?*const procs.Proc {
+    for (s.procs.items) |*p| if (std.mem.eql(u8, p.name, name)) return p;
+    return null;
+}
+
+test "a sample looks up names only for processes that are new since the last one" {
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    s.sample(0);
+    const everyone = s.procs.items.len;
+    try std.testing.expect(everyone > 20);
+    try std.testing.expect(s.lookups >= everyone);
+    try std.testing.expectEqual(@as(c_int, 0), system("/bin/sleep 41.5 & /bin/sleep 0.2"));
+    defer _ = system("/usr/bin/pkill -f 'sleep 41.5'");
+    const before = s.lookups;
+    s.sample(2);
+    try std.testing.expect(s.lookups - before < everyone / 4);
+    try std.testing.expect(s.lookups - before >= 1);
+    const me = s.find(@intCast(std.c.getpid())) orelse return error.NoSelf;
+    try std.testing.expectEqualStrings("test", me.name);
+    const sleeper = procNamed(&s, "sleep") orelse return error.NoSleeper;
+    try std.testing.expect(sleeper.known);
+    const sleeper_pid = sleeper.pid;
+    try std.testing.expectEqual(@as(c_int, 0), system("/usr/bin/pkill -f 'sleep 41.5'; /bin/sleep 0.2"));
+    s.sample(4);
+    try std.testing.expect(s.find(sleeper_pid) == null);
+    try std.testing.expectEqual(s.procs.items.len, s.cache.count());
+}
+
+test "a process that replaces itself with another program shows the new name" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("/bin/sh -c 'exec 1>/dev/null; /bin/sleep 0.8; exec /bin/sleep 44.5' & echo $! > pid", .{});
+    defer _ = system("/usr/bin/pkill -f 'sleep 44.5'");
+    var pb: [128]u8 = undefined;
+    const pid: i32 = @intCast(try shellNumber("cat '{s}'", .{try t.sub(&pb, "pid")}));
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    s.sample(0);
+    const shell = (s.find(pid) orelse return error.NoShell).name;
+    try std.testing.expect(!std.mem.eql(u8, shell, "sleep"));
+    _ = system("/bin/sleep 1.2");
+    s.sample(2);
+    try std.testing.expectEqualStrings("sleep", (s.find(pid) orelse return error.NoSleeper).name);
+}
+
+test "with no frames, as when the window is hidden, history still records every 10 seconds" {
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.heartbeat(100);
+    try std.testing.expectEqual(@as(usize, 1), a.sampler.samples);
+    a.heartbeat(105);
+    try std.testing.expectEqual(@as(usize, 1), a.sampler.samples);
+    a.heartbeat(110.5);
+    try std.testing.expectEqual(@as(usize, 2), a.sampler.samples);
+    a.heartbeat(121);
+    try std.testing.expectEqual(@as(usize, 3), a.sampler.samples);
+    try std.testing.expectEqual(@as(usize, 2), a.metrics.history.len);
+    _ = a.tick(122);
+    _ = a.tick(123);
+    try std.testing.expectEqual(@as(usize, 4), a.sampler.samples);
+    a.heartbeat(124);
+    try std.testing.expectEqual(@as(usize, 4), a.sampler.samples);
+}
+
 test "every page draws from this Mac's samples" {
     var a: App = .init(gpa, "/nonexistent-home", "", &.{});
     defer a.deinit();
