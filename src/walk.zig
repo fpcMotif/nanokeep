@@ -65,14 +65,30 @@ pub const Size = struct {
     newest: i64 = 0,
 };
 
+const dir_flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+const bulk_len = 64 * 1024;
+
+const Frame = struct { fd: c_int, start: usize, next: usize };
+
 pub const Walk = struct {
     gpa: std.mem.Allocator,
     cancel: *const std.atomic.Value(bool),
     size: Size = .{},
     linked: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    buf: []align(8) u8 = &.{},
+    frames: std.ArrayList(Frame) = .empty,
+    names: std.ArrayList(u8) = .empty,
 
     pub fn deinit(w: *Walk) void {
         w.linked.deinit(w.gpa);
+        w.gpa.free(w.buf);
+        w.frames.deinit(w.gpa);
+        w.names.deinit(w.gpa);
+    }
+
+    fn reset(w: *Walk) void {
+        w.size = .{};
+        w.linked.clearRetainingCapacity();
     }
 
     pub fn path(w: *Walk, p: [*:0]const u8) void {
@@ -80,10 +96,8 @@ pub const Walk = struct {
         if (getattrlist(p, &single_list, &buf, buf.len, FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS) != 0) return;
         w.size.newest = @max(w.size.newest, at(i64, &buf, one_modtime));
         if (at(u32, &buf, one_objtype) == VDIR) {
-            const fd = open(p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (fd < 0) return;
-            defer _ = close(fd);
-            w.dir(fd);
+            const fd = open(p, dir_flags);
+            if (fd >= 0) w.tree(fd);
             return;
         }
         if (at(u32, &buf, off_returned_file) & ATTR_FILE_ALLOCSIZE != 0) {
@@ -92,32 +106,69 @@ pub const Walk = struct {
         }
     }
 
+    fn tree(w: *Walk, root: c_int) void {
+        if (w.buf.len == 0) w.buf = w.gpa.alignedAlloc(u8, .@"8", bulk_len) catch {
+            _ = close(root);
+            return;
+        };
+        var fd = root;
+        while (fd >= 0) {
+            const start = w.names.items.len;
+            w.frames.append(w.gpa, .{ .fd = fd, .start = start, .next = start }) catch {
+                _ = close(fd);
+                break;
+            };
+            w.dir(fd);
+            fd = w.descend();
+        }
+        for (w.frames.items) |f| _ = close(f.fd);
+        w.frames.clearRetainingCapacity();
+        w.names.clearRetainingCapacity();
+    }
+
+    fn descend(w: *Walk) c_int {
+        while (w.frames.items.len > 0 and !w.cancel.load(.monotonic)) {
+            const top = &w.frames.items[w.frames.items.len - 1];
+            var child: c_int = -1;
+            if (top.next < w.names.items.len) {
+                const name: [*:0]const u8 = @ptrCast(w.names.items[top.next..].ptr);
+                top.next += std.mem.len(name) + 1;
+                child = openat(top.fd, name, dir_flags);
+            }
+            if (top.next == w.names.items.len) {
+                _ = close(top.fd);
+                w.names.shrinkRetainingCapacity(top.start);
+                _ = w.frames.pop();
+            }
+            if (child >= 0) return child;
+        }
+        return -1;
+    }
+
     fn dir(w: *Walk, fd: c_int) void {
-        var buf: [64 * 1024]u8 align(8) = undefined;
         while (!w.cancel.load(.monotonic)) {
-            const n = getattrlistbulk(fd, &bulk_list, &buf, buf.len, FSOPT_PACK_INVAL_ATTRS);
+            const n = getattrlistbulk(fd, &bulk_list, w.buf.ptr, w.buf.len, FSOPT_PACK_INVAL_ATTRS);
             if (n <= 0) return;
             var off: usize = 0;
             for (0..@intCast(n)) |_| {
-                const len = at(u32, &buf, off);
-                if (len == 0 or off + len > buf.len) return;
-                w.entry(fd, buf[off .. off + len]);
+                const len = at(u32, w.buf, off);
+                if (len == 0 or off + len > w.buf.len) return;
+                w.entry(w.buf[off .. off + len]);
                 off += len;
             }
         }
     }
 
-    fn entry(w: *Walk, fd: c_int, e: []const u8) void {
+    fn entry(w: *Walk, e: []const u8) void {
         w.size.newest = @max(w.size.newest, at(i64, e, off_modtime));
         if (at(u32, e, off_objtype) == VDIR) {
             const name_at: usize = off_name + @as(usize, @intCast(at(i32, e, off_name)));
             const name_len = at(u32, e, off_name + 4);
             if (name_len == 0 or name_at + name_len > e.len) return;
-            const name: [*:0]const u8 = @ptrCast(e[name_at..].ptr);
-            const child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-            if (child < 0) return;
-            defer _ = close(child);
-            w.dir(child);
+            const name = std.mem.sliceTo(e[name_at .. name_at + name_len], 0);
+            w.names.ensureUnusedCapacity(w.gpa, name.len + 1) catch return;
+            w.names.appendSliceAssumeCapacity(name);
+            w.names.appendAssumeCapacity(0);
             return;
         }
         if (at(u32, e, off_returned_file) & ATTR_FILE_ALLOCSIZE == 0) return;
@@ -142,31 +193,35 @@ pub fn sizeOf(gpa: std.mem.Allocator, p: [*:0]const u8) u64 {
     return measure(gpa, p).bytes;
 }
 
+const max_workers = 16;
+
 pub const Pool = struct {
     gpa: std.mem.Allocator,
     paths: []const [:0]const u8,
     out: []Size,
+    workers: usize = 4,
     next: std.atomic.Value(usize) = .init(0),
     cancel: std.atomic.Value(bool) = .init(false),
     stop: ?*const std.atomic.Value(bool) = null,
     measured: ?*std.atomic.Value(u64) = null,
 
     pub fn run(pool: *Pool) void {
-        const cpus = std.Thread.getCpuCount() catch 4;
-        const n = std.math.clamp(cpus, 1, 16);
-        var threads: [16]?std.Thread = @splat(null);
-        for (threads[0..n]) |*t| t.* = std.Thread.spawn(.{}, work, .{pool}) catch null;
+        const helpers = std.math.clamp(pool.workers, 1, max_workers) - 1;
+        var threads: [max_workers]?std.Thread = @splat(null);
+        for (threads[0..helpers]) |*t| t.* = std.Thread.spawn(.{}, work, .{pool}) catch null;
         work(pool);
-        for (threads[0..n]) |t| if (t) |th| th.join();
+        for (threads[0..helpers]) |t| if (t) |th| th.join();
     }
 
     fn work(pool: *Pool) void {
         const cancel = pool.stop orelse &pool.cancel;
+        var arena: std.heap.ArenaAllocator = .init(pool.gpa);
+        defer arena.deinit();
+        var w: Walk = .{ .gpa = arena.allocator(), .cancel = cancel };
         while (!pool.cancel.load(.monotonic) and !cancel.load(.monotonic)) {
             const i = pool.next.fetchAdd(1, .monotonic);
             if (i >= pool.paths.len) return;
-            var w: Walk = .{ .gpa = pool.gpa, .cancel = cancel };
-            defer w.deinit();
+            w.reset();
             w.path(pool.paths[i].ptr);
             pool.out[i] = w.size;
             if (pool.measured) |m| _ = m.fetchAdd(w.size.bytes, .monotonic);

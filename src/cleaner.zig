@@ -164,7 +164,7 @@ pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *co
     const out = gpa.alloc(walk.Size, paths.items.len) catch return;
     defer gpa.free(out);
     @memset(out, .{});
-    var pool: walk.Pool = .{ .gpa = std.heap.smp_allocator, .paths = paths.items, .out = out, .stop = &progress.stop, .measured = &progress.measured };
+    var pool: walk.Pool = .{ .gpa = gpa, .paths = paths.items, .out = out, .stop = &progress.stop, .measured = &progress.measured };
     pool.run();
     for (g.items.items, out) |*it, size| it.size = size;
     const age: ?i64 = switch (spec.kind) {

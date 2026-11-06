@@ -49,7 +49,7 @@ const budgets = [_]measure.Budget{
 
 const pages = std.enums.values(Page);
 const cycles = 20;
-const deep_levels = 120;
+const deep_levels = 400;
 const occlusion_visible = 2;
 const assertion_on = 255;
 const can_join_all_spaces = 1;

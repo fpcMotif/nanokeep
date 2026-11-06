@@ -121,6 +121,15 @@ test "the walker measures a single file" {
     try std.testing.expectEqual(try newestTime(f), @as(u64, @intCast(got.newest)));
 }
 
+test "the walker measures a tree deeper than a recursive walk could hold" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("p=$(printf 'd/%.0s' $(seq 400)) && mkdir -p $p && dd if=/dev/urandom of=${{p}}bottom bs=4096 count=3 2>/dev/null", .{});
+    const got = walk.measure(gpa, t.path().ptr);
+    try std.testing.expectEqual(try duBytes(t.path()), got.bytes);
+    try std.testing.expectEqual(@as(u64, 1), got.files);
+}
+
 test "the parallel pool gives each path its own size" {
     const t = try Tmp.make();
     defer t.remove();
@@ -129,7 +138,7 @@ test "the parallel pool gives each path its own size" {
     var py: [128]u8 = undefined;
     const paths = [_][:0]const u8{ try t.sub(&px, "x"), try t.sub(&py, "y") };
     var out: [2]walk.Size = .{ .{}, .{} };
-    var pool: walk.Pool = .{ .gpa = std.heap.smp_allocator, .paths = &paths, .out = &out };
+    var pool: walk.Pool = .{ .gpa = gpa, .paths = &paths, .out = &out };
     pool.run();
     try std.testing.expectEqual(try duBytes(paths[0]), out[0].bytes);
     try std.testing.expectEqual(try duBytes(paths[1]), out[1].bytes);

@@ -200,7 +200,7 @@ pub const Inventory = struct {
             inv.gpa.free(paths);
             return inv.gpa.free(out);
         };
-        m.* = .{ .inv = inv, .generation = inv.generation, .paths = paths, .out = out, .pool = .{ .gpa = std.heap.smp_allocator, .paths = paths, .out = out } };
+        m.* = .{ .inv = inv, .generation = inv.generation, .paths = paths, .out = out, .pool = .{ .gpa = inv.gpa, .paths = paths, .out = out } };
         inv.measuring = m;
         if (inv.sync) {
             m.pool.run();

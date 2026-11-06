@@ -265,7 +265,9 @@ pub const Metrics = struct {
         m.disk.read_total = d.read;
         m.disk.written_total = d.written;
         m.prev_disk = d;
-        const n = netBytes(std.heap.smp_allocator);
+        var net_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        const n = netBytes(net_arena.allocator());
+        net_arena.deinit();
         if (!first and wall > 0) {
             m.net.in = @floatCast(@as(f64, @floatFromInt(n.in -| m.prev_net.in)) / wall);
             m.net.out = @floatCast(@as(f64, @floatFromInt(n.out -| m.prev_net.out)) / wall);
