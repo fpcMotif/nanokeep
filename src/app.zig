@@ -8,6 +8,7 @@ const fda = @import("fda.zig");
 const metrics = @import("metrics.zig");
 const machine = @import("machine.zig");
 const iokit = @import("iokit.zig");
+const usage = @import("usage.zig");
 
 extern "c" fn time(t: ?*i64) i64;
 
@@ -53,6 +54,7 @@ pub const App = struct {
     everyone: groups.Table,
     metrics: metrics.Metrics,
     machine: machine.Machine = .{},
+    usage: usage.Ledger,
     toaster: nanoui.kit.Toaster,
     page: Page = .overview,
     range: Range = .h1,
@@ -98,6 +100,7 @@ pub const App = struct {
             .table = .{ .gpa = gpa },
             .everyone = .{ .gpa = gpa },
             .metrics = .init(),
+            .usage = .{ .gpa = gpa, .home = home },
             .toaster = .{ .gpa = gpa },
         };
     }
@@ -117,6 +120,8 @@ pub const App = struct {
         a.expanded_groups.deinit(a.gpa);
         a.table.deinit();
         a.toaster.deinit();
+        if (a.usage.dirty) a.usage.save() catch {};
+        a.usage.deinit();
         a.inventory.deinit();
         a.cleaner.deinit();
         a.sampler.deinit();
@@ -132,8 +137,19 @@ pub const App = struct {
         if (a.window) |w| w.redraw();
     }
 
+    fn noteUsage(a: *App) void {
+        const t = a.now();
+        a.usage.observe(a.sampler.procs.items, t);
+        if (a.usage.apply(a.inventory.apps.items) and a.app_sort == .opened) a.apps_version += 1;
+        if (a.usage.dirty and t - a.usage.saved_at >= usage.save_every) {
+            a.usage.save() catch {};
+            a.usage.saved_at = t;
+        }
+    }
+
     fn inventoryChanged(ctx: *anyopaque) void {
         const a: *App = @ptrCast(@alignCast(ctx));
+        _ = a.usage.apply(a.inventory.apps.items);
         a.apps_version += 1;
         changed(ctx);
     }
@@ -162,6 +178,7 @@ pub const App = struct {
             a.metrics.sample(t, a.sampler.system.power);
             a.awake_count = iokit.assertions(&a.awake);
             a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
+            a.noteUsage();
             a.last = t;
             if (a.sampler.samples == 1) a.last = t - interval + 0.6;
         }

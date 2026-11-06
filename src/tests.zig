@@ -15,7 +15,15 @@ const iokit = @import("iokit.zig");
 const view_clean = @import("view_clean.zig");
 const view_card = @import("view_card.zig");
 const measure = @import("measure.zig");
+const info_plist = @import("plist.zig");
+const usage = @import("usage.zig");
 const objc = nanoui.objc;
+
+extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
+extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
+extern "c" fn closedir(dir: *anyopaque) c_int;
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+const Dirent = extern struct { ino: u64, seekoff: u64, reclen: u16, namlen: u16, kind: u8, name: [1024]u8 };
 
 extern "c" const kCFRunLoopDefaultMode: *anyopaque;
 extern "c" fn CFRunLoopRunInMode(mode: *anyopaque, seconds: f64, once: bool) i32;
@@ -77,6 +85,17 @@ fn shellNumber(comptime fmt: []const u8, args: anytype) !u64 {
     return std.fmt.parseInt(u64, text[0..end], 10);
 }
 
+fn plutilString(buf: []u8, file: []const u8, key: []const u8) !?[]const u8 {
+    var cmd: [1400]u8 = undefined;
+    const s = try std.fmt.bufPrintSentinel(&cmd, "/usr/bin/plutil -extract {s} raw -expect string -o - '{s}' 2>/dev/null; echo \" $?\"", .{ key, file }, 0);
+    const f = popen(s, "r") orelse return error.Popen;
+    const n = fread(buf.ptr, 1, buf.len, f);
+    _ = pclose(f);
+    const out = buf[0..n];
+    if (!std.mem.endsWith(u8, out, " 0\n")) return null;
+    return std.mem.trimEnd(u8, out[0 .. n - 3], "\n");
+}
+
 fn duBytes(path: []const u8) !u64 {
     return (try shellNumber("/usr/bin/du -sk '{s}' 2>/dev/null", .{path})) * 1024;
 }
@@ -128,6 +147,92 @@ test "the walker measures a tree deeper than a recursive walk could hold" {
     const got = walk.measure(gpa, t.path().ptr);
     try std.testing.expectEqual(try duBytes(t.path()), got.bytes);
     try std.testing.expectEqual(@as(u64, 1), got.files);
+}
+
+const plist_keys = [_][]const u8{ "CFBundleDisplayName", "CFBundleName", "CFBundleShortVersionString", "CFBundleVersion", "CFBundleIdentifier", "CFBundleExecutable" };
+
+fn expectPlistLikePlutil(file: [:0]const u8) !void {
+    const data = try info_plist.readFile(gpa, file);
+    defer gpa.free(data);
+    for (plist_keys) |key| {
+        var want_buf: [1024]u8 = undefined;
+        const want = try plutilString(&want_buf, file, key);
+        const got = try info_plist.string(gpa, data, key);
+        defer if (got) |g| gpa.free(g);
+        if (want) |w| {
+            std.testing.expect(got != null) catch |err| {
+                std.debug.print("{s} {s}: want {s}, got none\n", .{ file, key, w });
+                return err;
+            };
+            std.testing.expectEqualStrings(w, got.?) catch |err| {
+                std.debug.print("{s} {s}\n", .{ file, key });
+                return err;
+            };
+        } else try std.testing.expect(got == null);
+    }
+}
+
+test "Info.plist strings read like plutil, in XML and binary form, with missing keys" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("printf '%s' '{s}' > xml.plist && printf '%s' '{s}' > odd.plist && cp odd.plist binary.plist && /usr/bin/plutil -convert binary1 binary.plist", .{ plist, odd_plist });
+    for ([_][]const u8{ "xml.plist", "odd.plist", "binary.plist" }) |name| {
+        var p: [128]u8 = undefined;
+        try expectPlistLikePlutil(try t.sub(&p, name));
+    }
+}
+
+test "a broken or hostile Info.plist reads as missing keys, never a crash" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("printf '%s' '{s}' > b.plist && /usr/bin/plutil -convert binary1 b.plist", .{odd_plist});
+    var p: [128]u8 = undefined;
+    const good = try info_plist.readFile(gpa, try t.sub(&p, "b.plist"));
+    defer gpa.free(good);
+    const bad = try gpa.dupe(u8, good);
+    defer gpa.free(bad);
+    for (0..good.len) |cut| if (try info_plist.string(gpa, good[0..cut], "CFBundleName")) |s| gpa.free(s);
+    for (0..good.len) |i| for ([_]u8{ 0x00, 0x18, 0x1f, 0x6f, 0xdf, 0xff }) |v| {
+        @memcpy(bad, good);
+        bad[i] = v;
+        if (try info_plist.string(gpa, bad, "CFBundleName")) |s| gpa.free(s);
+        if (i + 1 < bad.len) {
+            bad[i] = v | 0x0f;
+            bad[i + 1] = 0x1c;
+            if (try info_plist.string(gpa, bad, "CFBundleName")) |s| gpa.free(s);
+        }
+    };
+    for ([_][]const u8{ "</>", "<dict></>", "<plist><dict><key>CFBundleName</key></", "<dict><key>CFBundleName</key><string>&#xFFFFFFFF;&#;&", "<", "<dict" }) |xml| {
+        if (try info_plist.string(gpa, xml, "CFBundleName")) |s| gpa.free(s);
+    }
+}
+
+test "Info.plist strings read like plutil for every installed app" {
+    var checked: usize = 0;
+    for ([_][:0]const u8{ "/System/Applications", "/Applications" }) |root| {
+        const dir = opendir(root) orelse continue;
+        defer _ = closedir(dir);
+        while (readdir(dir)) |ent| {
+            const name = ent.name[0..ent.namlen];
+            if (!std.mem.endsWith(u8, name, ".app")) continue;
+            var p: [512]u8 = undefined;
+            const file = try std.fmt.bufPrintSentinel(&p, "{s}/{s}/Contents/Info.plist", .{ root, name }, 0);
+            if (access(file, 0) != 0) continue;
+            try expectPlistLikePlutil(file);
+            checked += 1;
+        }
+    }
+    try std.testing.expect(checked > 10);
+}
+
+extern "c" fn _NSGetExecutablePath(buf: [*]u8, size: *u32) c_int;
+
+test "nothing in nanokeep can call Spotlight" {
+    var exe: [1024]u8 = undefined;
+    var len: u32 = exe.len;
+    try std.testing.expectEqual(@as(c_int, 0), _NSGetExecutablePath(&exe, &len));
+    const path = std.mem.sliceTo(&exe, 0);
+    try std.testing.expectEqual(@as(u64, 0), try shellNumber("/usr/bin/strings -a '{s}' | /usr/bin/grep -c -E 'M[D]Item|M[D]Query|NSMetadat[a]Query|mdfin[d]|CoreService[s]'", .{path}));
 }
 
 test "the parallel pool gives each path its own size" {
@@ -672,6 +777,107 @@ fn pump(cl: *const cleaner.Cleaner) void {
     while (cl.job != null and spins < 600) : (spins += 1) _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
 }
 
+test "the app list loads after the first frame, without blocking it" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist", .{plist});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.inventory.load();
+    try std.testing.expect(!a.inventory.loaded);
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(1100, 720);
+    tester.frame();
+    try tester.clickText("Apps");
+    var spins: usize = 0;
+    while (!a.inventory.loaded and spins < 200) : (spins += 1) _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    while (a.inventory.measuring != null and spins < 400) : (spins += 1) _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Fake Tool"));
+    try std.testing.expect(tester.hasText("2.4.1"));
+    try std.testing.expect(a.inventory.apps.items[0].kind != .unknown);
+}
+
+test "app usage comes from process samples, survives a restart, and is unknown with no record" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir Foo.app Bar.app Gone.app", .{});
+    var b1: [128]u8 = undefined;
+    var b2: [128]u8 = undefined;
+    var b3: [128]u8 = undefined;
+    var b4: [128]u8 = undefined;
+    const foo = try t.sub(&b1, "Foo.app");
+    const bar = try t.sub(&b2, "Bar.app");
+    const gone = try t.sub(&b3, "Gone.app");
+    const never = try t.sub(&b4, "Never.app");
+    var first: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer first.deinit();
+    first.observe(&.{
+        .{ .pid = 10, .uid = 0, .bundle = foo },
+        .{ .pid = 11, .uid = 0, .bundle = "" },
+        .{ .pid = 12, .uid = 0, .bundle = bar },
+        .{ .pid = 13, .uid = 0, .bundle = gone },
+    }, 1_000);
+    first.observe(&.{.{ .pid = 10, .uid = 0, .bundle = foo }}, 2_000);
+    try std.testing.expectEqual(@as(i64, 2_000), first.lastSeen(foo));
+    try std.testing.expectEqual(@as(i64, 1_000), first.lastSeen(bar));
+    try std.testing.expectEqual(@as(i64, 1_000), first.lastSeen(gone));
+    try std.testing.expectEqual(@as(i64, 0), first.lastSeen(never));
+    try std.testing.expectEqual(@as(i64, 0), first.lastSeen(""));
+    try first.save();
+    try t.sh("rmdir Gone.app", .{});
+
+    var second: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer second.deinit();
+    second.load();
+    try std.testing.expectEqual(@as(i64, 2_000), second.lastSeen(foo));
+    try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(bar));
+    try std.testing.expectEqual(@as(i64, 0), second.lastSeen(gone));
+    try std.testing.expectEqual(@as(i64, 0), second.lastSeen(never));
+    second.observe(&.{.{ .pid = 12, .uid = 0, .bundle = bar }}, 500);
+    try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(bar));
+}
+
+test "the Apps page shows when each app last ran, from the saved usage, and unknown otherwise" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS Apps/Second.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && cp /usr/bin/true Apps/Second.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist && printf '%s' '{s}' > Apps/Second.app/Contents/Info.plist", .{ plist, second_plist });
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var fb: [160]u8 = undefined;
+    const fake = try std.fmt.bufPrint(&fb, "{s}/Apps/Fake.app", .{t.path()});
+    {
+        var ledger: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+        defer ledger.deinit();
+        ledger.observe(&.{.{ .pid = 1, .uid = 0, .bundle = fake }}, time(null) - 3 * 86400);
+        try ledger.save();
+    }
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.usage.load();
+    a.inventory.sync = true;
+    a.inventory.load();
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(1100, 720);
+    tester.frame();
+    try tester.clickText("Apps");
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Fake Tool"));
+    try std.testing.expect(tester.hasText("Second Tool"));
+    try std.testing.expect(tester.hasText("3 days ago"));
+    for (a.inventory.apps.items) |info| {
+        if (std.mem.eql(u8, info.name, "Second Tool")) try std.testing.expectEqual(@as(i64, 0), info.last_opened);
+    }
+}
+
 test "a scan fills in one category at a time, and Cancel stops it" {
     const t = try Tmp.make();
     defer t.remove();
@@ -803,6 +1009,25 @@ fn shotTo(tester: *ui.Tester, name: []const u8) !void {
     var pb: [512]u8 = undefined;
     try tester.screenshot(try std.fmt.bufPrint(&pb, "{s}/{s}.png", .{ std.mem.span(dir), name }));
 }
+
+const odd_plist =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    \\<plist version="1.0">
+    \\<dict>
+    \\  <key>CFBundleDocumentTypes</key>
+    \\  <array><dict><key>CFBundleName</key><string>Nested Wrong</string></dict></array>
+    \\  <key>CFBundleName</key>
+    \\  <string>Café &amp; Tööls ✓</string>
+    \\  <key>CFBundleVersion</key>
+    \\  <integer>7</integer>
+    \\  <key>CFBundleIdentifier</key>
+    \\  <string/>
+    \\  <key>CFBundleShortVersionString</key>
+    \\  <string>&lt;13&gt; &#65;&#x42;</string>
+    \\</dict>
+    \\</plist>
+;
 
 const second_plist =
     \\<?xml version="1.0" encoding="UTF-8"?>

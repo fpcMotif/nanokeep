@@ -14,8 +14,8 @@ pub fn start(a: *App, app: *nanoui.App) !*nanoui.Window {
     a.clock = seconds;
     a.machine.read();
     a.machine.lookUpName();
-    a.inventory.load();
-    a.orderApps();
+    a.usage.load();
+    nanoui.objc.dispatchMain(a, loadApps);
     const w = try app.newWindow(.{
         .title = "nanokeep",
         .width = 1100,
@@ -26,6 +26,11 @@ pub fn start(a: *App, app: *nanoui.App) !*nanoui.Window {
     });
     a.window = w;
     return w;
+}
+
+fn loadApps(ctx: ?*anyopaque) callconv(.c) void {
+    const a: *App = @ptrCast(@alignCast(ctx));
+    a.inventory.load();
 }
 
 pub fn main(init: std.process.Init) !void {

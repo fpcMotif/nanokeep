@@ -20,7 +20,7 @@ extern "c" fn IOPMAssertionRelease(id: u32) c_int;
 
 // Tightened after each win; `target` is what issue #1 asks for.
 const budgets = [_]measure.Budget{
-    .{ .name = "cold_start_ms", .budget = 1250, .target = 35 },
+    .{ .name = "cold_start_ms", .budget = 500, .target = 35 },
     .{ .name = "page_switch_p50_ms", .budget = 9, .target = 0.28 },
     .{ .name = "page_switch_p95_ms", .budget = 18, .target = 0.28 },
     .{ .name = "hover_p50_ms", .budget = 9, .target = 0.28 },

@@ -1,6 +1,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const walk = @import("walk.zig");
+const plist = @import("plist.zig");
 const objc = nanoui.objc;
 
 extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
@@ -10,15 +11,9 @@ extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
 extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
 extern "c" fn read(fd: c_int, buf: [*]u8, n: usize) isize;
 extern "c" fn close(fd: c_int) c_int;
-extern "c" fn MDItemCreate(alloc: ?*anyopaque, path: objc.Object) ?*anyopaque;
-extern "c" fn MDItemCopyAttribute(item: *anyopaque, name: *anyopaque) ?*anyopaque;
-extern "c" var kMDItemLastUsedDate: *anyopaque;
-extern "c" fn CFDateGetAbsoluteTime(date: *anyopaque) f64;
-extern "c" fn CFRelease(obj: *anyopaque) void;
 
 const Dirent = extern struct { ino: u64, seekoff: u64, reclen: u16, namlen: u16, kind: u8, name: [1024]u8 };
 const DT_DIR = 4;
-const cf_epoch: f64 = 978307200;
 
 const CPU_ARM64: u32 = 0x0100000c;
 const CPU_X86_64: u32 = 0x01000007;
@@ -104,17 +99,97 @@ const Measure = struct {
     }
 };
 
+const Listing = struct {
+    inv: *Inventory,
+    apps: std.ArrayList(AppInfo) = .empty,
+    thread: ?std.Thread = null,
+
+    fn work(l: *Listing) void {
+        l.list();
+        objc.dispatchMain(l, finished);
+    }
+
+    fn finished(ctx: ?*anyopaque) callconv(.c) void {
+        const l: *Listing = @ptrCast(@alignCast(ctx));
+        l.inv.listed(l);
+    }
+
+    fn free(l: *Listing, gpa: std.mem.Allocator) void {
+        for (l.apps.items) |a| a.free(gpa);
+        l.apps.deinit(gpa);
+        gpa.destroy(l);
+    }
+
+    fn list(l: *Listing) void {
+        for (l.inv.dirs) |dir| l.listDir(dir, 1) catch {};
+        std.mem.sort(AppInfo, l.apps.items, {}, struct {
+            fn lt(_: void, a: AppInfo, b: AppInfo) bool {
+                return std.ascii.orderIgnoreCase(a.name, b.name) == .lt;
+            }
+        }.lt);
+    }
+
+    fn listDir(l: *Listing, dir: []const u8, depth: u8) !void {
+        const gpa = l.inv.gpa;
+        const dir_z = try gpa.dupeSentinel(u8, dir, 0);
+        defer gpa.free(dir_z);
+        const d = opendir(dir_z) orelse return;
+        defer _ = closedir(d);
+        while (readdir(d)) |ent| {
+            if (ent.kind != DT_DIR) continue;
+            const name = ent.name[0..ent.namlen];
+            if (name.len == 0 or name[0] == '.') continue;
+            const path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir, name });
+            defer gpa.free(path);
+            if (std.mem.endsWith(u8, name, ".app")) {
+                try l.add(path);
+            } else if (depth > 0) try l.listDir(path, depth - 1);
+        }
+    }
+
+    fn add(l: *Listing, path: []const u8) !void {
+        const gpa = l.inv.gpa;
+        const base = std.fs.path.basename(path);
+        var info: AppInfo = .{ .path = try gpa.dupeSentinel(u8, path, 0), .name = undefined, .version = undefined };
+        errdefer gpa.free(info.path);
+        const plist_path = try std.fmt.allocPrintSentinel(gpa, "{s}/Contents/Info.plist", .{path}, 0);
+        defer gpa.free(plist_path);
+        const data = plist.readFile(gpa, plist_path) catch try gpa.alloc(u8, 0);
+        defer gpa.free(data);
+        info.name = try firstString(gpa, data, &.{ "CFBundleDisplayName", "CFBundleName" }) orelse try gpa.dupe(u8, base[0 .. base.len - 4]);
+        errdefer gpa.free(info.name);
+        info.version = try firstString(gpa, data, &.{ "CFBundleShortVersionString", "CFBundleVersion" }) orelse try gpa.alloc(u8, 0);
+        errdefer gpa.free(info.version);
+        if (try plist.string(gpa, data, "CFBundleExecutable")) |exe| {
+            defer gpa.free(exe);
+            const exe_path = try std.fmt.allocPrintSentinel(gpa, "{s}/Contents/MacOS/{s}", .{ path, exe }, 0);
+            defer gpa.free(exe_path);
+            info.kind = readKind(exe_path);
+        }
+        const receipt = try std.fmt.allocPrintSentinel(gpa, "{s}/Contents/_MASReceipt/receipt", .{path}, 0);
+        defer gpa.free(receipt);
+        info.app_store = access(receipt, 0) == 0;
+        try l.apps.append(gpa, info);
+    }
+};
+
 pub const Inventory = struct {
     gpa: std.mem.Allocator,
     dirs: []const []const u8,
     apps: std.ArrayList(AppInfo) = .empty,
     loaded: bool = false,
+    listing: ?*Listing = null,
     measuring: ?*Measure = null,
     generation: u64 = 0,
     sync: bool = false,
     on_change: ?Notify = null,
 
     pub fn deinit(inv: *Inventory) void {
+        if (inv.listing) |l| {
+            if (l.thread) |t| t.join();
+            l.free(inv.gpa);
+            inv.listing = null;
+        }
         if (inv.measuring) |m| {
             m.pool.cancel.store(true, .monotonic);
             if (m.thread) |t| t.join();
@@ -136,58 +211,31 @@ pub const Inventory = struct {
     }
 
     pub fn load(inv: *Inventory) void {
-        if (inv.measuring != null) return;
+        if (inv.measuring != null or inv.listing != null) return;
+        const l = inv.gpa.create(Listing) catch return;
+        l.* = .{ .inv = inv };
+        inv.listing = l;
+        if (inv.sync) {
+            l.list();
+            return inv.listed(l);
+        }
+        l.thread = std.Thread.spawn(.{}, Listing.work, .{l}) catch {
+            l.list();
+            return inv.listed(l);
+        };
+    }
+
+    fn listed(inv: *Inventory, l: *Listing) void {
+        if (l.thread) |t| t.join();
         inv.clear();
+        inv.apps.deinit(inv.gpa);
+        inv.apps = l.apps;
+        inv.gpa.destroy(l);
+        inv.listing = null;
         inv.generation += 1;
-        for (inv.dirs) |dir| inv.listDir(dir, 1) catch {};
-        std.mem.sort(AppInfo, inv.apps.items, {}, struct {
-            fn lt(_: void, a: AppInfo, b: AppInfo) bool {
-                return std.ascii.orderIgnoreCase(a.name, b.name) == .lt;
-            }
-        }.lt);
         inv.loaded = true;
         inv.startMeasure();
         inv.tell();
-    }
-
-    fn listDir(inv: *Inventory, dir: []const u8, depth: u8) !void {
-        const dir_z = try inv.gpa.dupeSentinel(u8, dir, 0);
-        defer inv.gpa.free(dir_z);
-        const d = opendir(dir_z) orelse return;
-        defer _ = closedir(d);
-        while (readdir(d)) |ent| {
-            if (ent.kind != DT_DIR) continue;
-            const name = ent.name[0..ent.namlen];
-            if (name.len == 0 or name[0] == '.') continue;
-            const path = try std.fmt.allocPrint(inv.gpa, "{s}/{s}", .{ dir, name });
-            defer inv.gpa.free(path);
-            if (std.mem.endsWith(u8, name, ".app")) {
-                try inv.add(path);
-            } else if (depth > 0) try inv.listDir(path, depth - 1);
-        }
-    }
-
-    fn add(inv: *Inventory, path: []const u8) !void {
-        const pool = objc.Pool.push();
-        defer pool.pop();
-        const base = std.fs.path.basename(path);
-        var info: AppInfo = .{ .path = try inv.gpa.dupeSentinel(u8, path, 0), .name = undefined, .version = undefined };
-        errdefer inv.gpa.free(info.path);
-        const bundle = objc.msg(?objc.Object, objc.class("NSBundle"), "bundleWithPath:", .{objc.nsString(path)});
-        const display = plistString(bundle, "CFBundleDisplayName") orelse plistString(bundle, "CFBundleName") orelse base[0 .. base.len - 4];
-        info.name = try inv.gpa.dupe(u8, if (display.len > 0) display else base[0 .. base.len - 4]);
-        errdefer inv.gpa.free(info.name);
-        const version = plistString(bundle, "CFBundleShortVersionString") orelse plistString(bundle, "CFBundleVersion") orelse "";
-        info.version = try inv.gpa.dupe(u8, version);
-        if (bundle) |b| {
-            const exe = objc.fromNSString(objc.msg(?objc.Object, b, "executablePath", .{}));
-            if (exe.len > 0) info.kind = readKind(inv.gpa, exe);
-        }
-        const receipt = try std.fmt.allocPrintSentinel(inv.gpa, "{s}/Contents/_MASReceipt/receipt", .{path}, 0);
-        defer inv.gpa.free(receipt);
-        info.app_store = access(receipt, 0) == 0;
-        info.last_opened = lastUsed(path);
-        try inv.apps.append(inv.gpa, info);
     }
 
     fn startMeasure(inv: *Inventory) void {
@@ -240,33 +288,20 @@ pub const Inventory = struct {
     }
 };
 
-fn plistString(bundle: ?objc.Object, key: []const u8) ?[]const u8 {
-    const b = bundle orelse return null;
-    const v = objc.msg(?objc.Object, b, "objectForInfoDictionaryKey:", .{objc.nsString(key)}) orelse return null;
-    const is_string = objc.msg(objc.BOOL, v, "isKindOfClass:", .{objc.class("NSString")});
-    if (!is_string) return null;
-    const s = objc.fromNSString(v);
-    return if (s.len > 0) s else null;
+fn firstString(gpa: std.mem.Allocator, data: []const u8, keys: []const []const u8) !?[]u8 {
+    for (keys) |key| if (try plist.string(gpa, data, key)) |s| {
+        if (s.len > 0) return s;
+        gpa.free(s);
+    };
+    return null;
 }
 
-fn readKind(gpa: std.mem.Allocator, exe: []const u8) Kind {
-    const z = gpa.dupeSentinel(u8, exe, 0) catch return .unknown;
-    defer gpa.free(z);
-    const fd = open(z, 0);
+fn readKind(exe: [:0]const u8) Kind {
+    const fd = open(exe, 0);
     if (fd < 0) return .unknown;
     defer _ = close(fd);
     var buf: [512]u8 = undefined;
     const n = read(fd, &buf, buf.len);
     if (n <= 0) return .unknown;
     return kindOf(buf[0..@intCast(n)]);
-}
-
-fn lastUsed(path: []const u8) i64 {
-    const item = MDItemCreate(null, objc.nsString(path)) orelse return 0;
-    defer CFRelease(item);
-    const date = MDItemCopyAttribute(item, kMDItemLastUsedDate) orelse return 0;
-    defer CFRelease(date);
-    const since_2001 = CFDateGetAbsoluteTime(date);
-    if (since_2001 <= 0) return 0;
-    return @intFromFloat(since_2001 + cf_epoch);
 }

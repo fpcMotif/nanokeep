@@ -31,7 +31,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = imports,
     }) });
-    exe.root_module.linkFramework("CoreServices", .{});
     exe.root_module.linkFramework("CoreGraphics", .{});
     exe.root_module.linkFramework("IOKit", .{});
     b.installArtifact(exe);
@@ -54,7 +53,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = &.{.{ .name = "nanoui", .module = bench_nanoui }},
     }) });
-    bench.root_module.linkFramework("CoreServices", .{});
     bench.root_module.linkFramework("CoreGraphics", .{});
     bench.root_module.linkFramework("IOKit", .{});
     const bench_run = b.addRunArtifact(bench);
@@ -70,7 +68,6 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
         .imports = imports,
     }) });
-    tests.root_module.linkFramework("CoreServices", .{});
     tests.root_module.linkFramework("CoreGraphics", .{});
     tests.root_module.linkFramework("IOKit", .{});
     b.step("test", "Run nanokeep tests").dependOn(&b.addRunArtifact(tests).step);
