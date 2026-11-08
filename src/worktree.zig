@@ -3,6 +3,9 @@ const run = @import("run.zig");
 
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
 
+const F_OK = 0;
+const repo_depth = 2;
+
 const Dir = @import("dir.zig").Dir;
 const DT_DIR = @import("dir.zig").DT_DIR;
 
@@ -51,7 +54,7 @@ pub fn candidates(gpa: std.mem.Allocator, home: []const u8) !std.ArrayList([:0]u
     for (roots) |root| {
         const dir = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ home, root }, 0);
         defer gpa.free(dir);
-        try collect(gpa, &out, dir, 2);
+        try collect(gpa, &out, dir, repo_depth);
     }
     return out;
 }
@@ -59,7 +62,7 @@ pub fn candidates(gpa: std.mem.Allocator, home: []const u8) !std.ArrayList([:0]u
 fn isRepo(gpa: std.mem.Allocator, dir: []const u8) bool {
     const dot = std.fmt.allocPrintSentinel(gpa, "{s}/.git", .{dir}, 0) catch return false;
     defer gpa.free(dot);
-    return access(dot, 0) == 0;
+    return access(dot, F_OK) == 0;
 }
 
 fn collect(gpa: std.mem.Allocator, out: *std.ArrayList([:0]u8), dir: [:0]const u8, depth: u8) !void {
@@ -115,14 +118,14 @@ pub fn find(gpa: std.mem.Allocator, home: []const u8) !std.ArrayList(Found) {
         if (listed.code != 0) continue;
         const entries = parseList(gpa, listed.out) catch continue;
         defer gpa.free(entries);
-        if (entries.len < 2) continue;
+        if (entries.len <= 1) continue;
         const main = entries[0].path;
         if (seen.contains(main)) continue;
         try seen.put(gpa, try gpa.dupe(u8, main), {});
         for (entries[1..]) |e| {
             if (e.locked or e.prunable or e.bare) continue;
             const path = try gpa.dupeSentinel(u8, e.path, 0);
-            if (access(path, 0) != 0 or !isClean(gpa, path)) {
+            if (access(path, F_OK) != 0 or !isClean(gpa, path)) {
                 gpa.free(path);
                 continue;
             }

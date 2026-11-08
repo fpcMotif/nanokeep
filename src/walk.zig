@@ -55,13 +55,17 @@ const off_allocsize = 64;
 const one_objtype = 24;
 const one_modtime = 28;
 const one_allocsize = 44;
+const one_len = 64;
+
+const mtime_len = @sizeOf(i64);
 
 fn at(comptime T: type, buf: []const u8, off: usize) T {
     return std.mem.readInt(T, buf[off..][0..@sizeOf(T)], .little);
 }
 
 fn nanos(buf: []const u8, off: usize) i64 {
-    return at(i64, buf, off) *% std.time.ns_per_s +% at(i64, buf, off + 8);
+    const tv_nsec_at = @sizeOf(i64);
+    return at(i64, buf, off) *% std.time.ns_per_s +% at(i64, buf, off + tv_nsec_at);
 }
 
 pub const Size = struct {
@@ -159,7 +163,8 @@ const Frame = struct {
 
 const Child = struct { mtime: i64, old: u32, name: []const u8, mark: usize };
 
-const max_rel = 1024 - 256 - 8;
+const PATH_MAX = 1024;
+const max_rel = PATH_MAX - 256 - 8;
 
 fn lasting(err: std.c.E) bool {
     return err == .ACCES or err == .PERM or err == .NOENT;
@@ -203,7 +208,7 @@ pub const Walk = struct {
     }
 
     pub fn path(w: *Walk, p: [*:0]const u8) void {
-        var buf: [64]u8 align(8) = undefined;
+        var buf: [one_len]u8 align(8) = undefined;
         if (getattrlist(p, &single_list, &buf, buf.len, FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS) != 0) return;
         w.size.newest = @max(w.size.newest, at(i64, &buf, one_modtime));
         if (at(u32, &buf, one_objtype) == VDIR) {
@@ -339,8 +344,8 @@ pub const Walk = struct {
                 c = .{ .mtime = 0, .old = i, .name = t.name(i), .mark = w.rel.items.len };
             } else {
                 const mtime = at(i64, w.names.items, top.next);
-                const name = std.mem.sliceTo(w.names.items[top.next + 8 ..], 0);
-                top.next += 8 + name.len + 1;
+                const name = std.mem.sliceTo(w.names.items[top.next + mtime_len ..], 0);
+                top.next += mtime_len + name.len + 1;
                 c = .{ .mtime = mtime, .old = w.match(top, name), .name = name, .mark = w.rel.items.len };
             }
             const slash: usize = @intFromBool(w.rel.items.len > top.base);
@@ -351,7 +356,7 @@ pub const Walk = struct {
             if (slash == 1) w.rel.appendAssumeCapacity('/');
             w.rel.appendSliceAssumeCapacity(c.name);
             if (top.reused) {
-                var buf: [64]u8 align(8) = undefined;
+                var buf: [one_len]u8 align(8) = undefined;
                 const got = getattrlistat(top.anchor, w.relPath(top.base), &single_list, &buf, buf.len, FSOPT_NOFOLLOW | FSOPT_PACK_INVAL_ATTRS);
                 if (got != 0 or at(u32, &buf, one_objtype) != VDIR) {
                     if (got != 0 and !lasting(std.c.errno(got))) w.overflow = true;
@@ -407,11 +412,11 @@ pub const Walk = struct {
             const name_len = at(u32, e, off_name + 4);
             if (name_len == 0 or name_at + name_len > e.len) return;
             const name = std.mem.sliceTo(e[name_at .. name_at + name_len], 0);
-            w.names.ensureUnusedCapacity(w.gpa, 8 + name.len + 1) catch {
+            w.names.ensureUnusedCapacity(w.gpa, mtime_len + name.len + 1) catch {
                 w.overflow = true;
                 return;
             };
-            var mtime: [8]u8 = undefined;
+            var mtime: [mtime_len]u8 = undefined;
             std.mem.writeInt(i64, &mtime, nanos(e, off_modtime), .little);
             w.names.appendSliceAssumeCapacity(&mtime);
             w.names.appendSliceAssumeCapacity(name);
@@ -443,10 +448,6 @@ pub fn measure(gpa: std.mem.Allocator, p: [*:0]const u8) Size {
     return w.size;
 }
 
-pub fn sizeOf(gpa: std.mem.Allocator, p: [*:0]const u8) u64 {
-    return measure(gpa, p).bytes;
-}
-
 pub fn measureAgain(gpa: std.mem.Allocator, p: [*:0]const u8, prev: ?*const Tree, limit: u32) Measured {
     var cancel: std.atomic.Value(bool) = .init(false);
     var w: Walk = .{ .gpa = gpa, .cancel = &cancel, .prev = prev, .limit = limit };
@@ -455,13 +456,12 @@ pub fn measureAgain(gpa: std.mem.Allocator, p: [*:0]const u8, prev: ?*const Tree
     return .{ .size = w.size, .tree = w.takeTree(gpa), .listed = w.listed };
 }
 
-const max_workers = 16;
+const workers = 4;
 
 pub const Pool = struct {
     gpa: std.mem.Allocator,
     paths: []const [:0]const u8,
     out: []Size,
-    workers: usize = 4,
     next: std.atomic.Value(usize) = .init(0),
     cancel: std.atomic.Value(bool) = .init(false),
     stop: ?*const std.atomic.Value(bool) = null,
@@ -472,11 +472,10 @@ pub const Pool = struct {
     limit: u32 = max_nodes,
 
     pub fn run(pool: *Pool) void {
-        const helpers = std.math.clamp(pool.workers, 1, max_workers) - 1;
-        var threads: [max_workers]?std.Thread = @splat(null);
-        for (threads[0..helpers]) |*t| t.* = std.Thread.spawn(.{}, work, .{pool}) catch null;
+        var helpers: [workers - 1]?std.Thread = @splat(null);
+        for (&helpers) |*t| t.* = std.Thread.spawn(.{}, work, .{pool}) catch null;
         work(pool);
-        for (threads[0..helpers]) |t| if (t) |th| th.join();
+        for (helpers) |t| if (t) |th| th.join();
     }
 
     fn work(pool: *Pool) void {

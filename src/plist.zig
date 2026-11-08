@@ -126,7 +126,7 @@ const Binary = struct {
     fn int(data: []const u8, at: u64, size: u8) !u64 {
         if (size == 0 or size > 8 or at > data.len or size > data.len - at) return error.Invalid;
         var v: u64 = 0;
-        for (data[@intCast(at)..][0..size]) |b| v = v << 8 | b;
+        for (data[@intCast(at)..][0..size]) |b| v = (v << 8) | b;
         return v;
     }
 

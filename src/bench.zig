@@ -62,7 +62,7 @@ extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
 const CLOCK_THREAD_CPUTIME_ID = 16;
 
 fn threadCpu() f64 {
-    return @as(f64, @floatFromInt(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID))) / 1e9;
+    return @as(f64, @floatFromInt(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID))) / std.time.ns_per_s;
 }
 
 fn ms(since: f64) f64 {
@@ -210,7 +210,7 @@ const Bench = struct {
     fn sampling(b: *Bench) !void {
         var times: [20]f64 = undefined;
         for (&times) |*s| {
-            b.a.last = -1e9;
+            b.a.last = @import("app.zig").never_sampled;
             const t = seconds();
             _ = b.a.tick(t);
             s.* = ms(t);
@@ -278,7 +278,7 @@ const Bench = struct {
             _ = try b.timedFrame();
         }
         for (0..3) |_| {
-            b.a.last = -1e9;
+            b.a.last = @import("app.zig").never_sampled;
             _ = b.a.tick(seconds());
         }
     }

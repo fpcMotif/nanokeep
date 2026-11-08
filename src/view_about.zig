@@ -1,7 +1,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const metrics = @import("metrics.zig");
 const procs = @import("procs.zig");
 const card = @import("view_card.zig");
 const view = @import("view.zig");

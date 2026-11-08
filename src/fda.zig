@@ -22,7 +22,17 @@ const panel_w = 380;
 const panel_h = 110;
 const borderless_nonactivating = 1 << 7;
 const floating_level = 3;
-const drag_copy_link_generic = 1 | 2 | 4;
+const NSDragOperationCopy = 1;
+const NSDragOperationLink = 2;
+const NSDragOperationGeneric = 4;
+const drag_copy_link_generic = NSDragOperationCopy | NSDragOperationLink | NSDragOperationGeneric;
+const NSBackingStoreBuffered = 2;
+const kCGWindowListOptionOnScreenOnly = 1;
+const kCGWindowListExcludeDesktopElements = 16;
+const overlap_settings = 20;
+const lift_alone = 80;
+const screen_margin_x = 12;
+const screen_margin_y = 8;
 
 /// macOS guards the TCC database with Full Disk Access: reading it is the grant check.
 pub fn granted(home: []const u8) bool {
@@ -130,7 +140,7 @@ pub const Guide = struct {
         const path = g.dragPath();
         const panel_class = objc.defineClass(.{ .name = "NanokeepGuidePanel", .superclass = "NSPanel", .methods = &.{} });
         const panel = objc.msg(Object, objc.msg(Object, panel_class, "alloc", .{}), "initWithContentRect:styleMask:backing:defer:", .{
-            rect(0, 0, panel_w, panel_h), @as(objc.NSUInteger, borderless_nonactivating), @as(objc.NSUInteger, 2), objc.NO,
+            rect(0, 0, panel_w, panel_h), @as(objc.NSUInteger, borderless_nonactivating), @as(objc.NSUInteger, NSBackingStoreBuffered), objc.NO,
         });
         objc.msg(void, panel, "setReleasedWhenClosed:", .{objc.NO});
         objc.msg(void, panel, "setFloatingPanel:", .{objc.YES});
@@ -216,16 +226,16 @@ pub const Guide = struct {
 /// Under the System Settings window when it is on screen, else low in the middle of the screen.
 pub fn anchor(target: ?CGRect, screen: CGRect) CGRect {
     var r = if (target) |t|
-        rect(t.origin.x + t.size.width / 2 - panel_w / 2, t.origin.y - panel_h + 20, panel_w, panel_h)
+        rect(t.origin.x + t.size.width / 2 - panel_w / 2, t.origin.y - panel_h + overlap_settings, panel_w, panel_h)
     else
-        rect(screen.origin.x + screen.size.width / 2 - panel_w / 2, screen.origin.y + 80, panel_w, panel_h);
-    r.origin.x = std.math.clamp(r.origin.x, screen.origin.x + 12, screen.origin.x + screen.size.width - panel_w - 12);
-    r.origin.y = std.math.clamp(r.origin.y, screen.origin.y + 8, screen.origin.y + screen.size.height - panel_h - 8);
+        rect(screen.origin.x + screen.size.width / 2 - panel_w / 2, screen.origin.y + lift_alone, panel_w, panel_h);
+    r.origin.x = std.math.clamp(r.origin.x, screen.origin.x + screen_margin_x, screen.origin.x + screen.size.width - panel_w - screen_margin_x);
+    r.origin.y = std.math.clamp(r.origin.y, screen.origin.y + screen_margin_y, screen.origin.y + screen.size.height - panel_h - screen_margin_y);
     return r;
 }
 
 fn settingsWindow(primary_height: f64) ?CGRect {
-    const list = CGWindowListCopyWindowInfo(1 | 16, 0) orelse return null;
+    const list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, 0) orelse return null;
     defer CFRelease(list);
     const n = objc.msg(objc.NSUInteger, list, "count", .{});
     for (0..n) |i| {

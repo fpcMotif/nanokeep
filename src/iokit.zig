@@ -275,20 +275,23 @@ pub const Thermometer = struct {
     }
 
     fn pack(temps: Temps) u64 {
-        const c: u64 = @intFromFloat(@round(temps.cpu * 100));
-        const m: u64 = @intFromFloat(@round(temps.cpu_max * 100));
-        const s: u64 = @intFromFloat(@round(temps.storage * 100));
-        return c | m << 16 | s << 32 | @as(u64, @intFromBool(temps.found)) << 48;
+        const c: u64 = @intFromFloat(@round(temps.cpu * centi));
+        const m: u64 = @intFromFloat(@round(temps.cpu_max * centi));
+        const s: u64 = @intFromFloat(@round(temps.storage * centi));
+        return c | (m << field_bits) | (s << 2 * field_bits) | (@as(u64, @intFromBool(temps.found)) << 3 * field_bits);
     }
 
     fn unpack(v: u64) Temps {
         const part = struct {
             fn f(x: u64, shift: u6) f32 {
-                return @as(f32, @floatFromInt(@as(u16, @truncate(x >> shift)))) / 100;
+                return @as(f32, @floatFromInt(@as(u16, @truncate(x >> shift)))) / centi;
             }
         }.f;
-        return .{ .cpu = part(v, 0), .cpu_max = part(v, 16), .storage = part(v, 32), .found = v >> 48 & 1 != 0 };
+        return .{ .cpu = part(v, 0), .cpu_max = part(v, field_bits), .storage = part(v, 2 * field_bits), .found = (v >> 3 * field_bits) & 1 != 0 };
     }
+
+    const centi = 100;
+    const field_bits = 16;
 
     fn measure(t: *Thermometer) Temps {
         var out: Temps = .{};

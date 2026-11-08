@@ -13,8 +13,18 @@ extern "c" fn rename(from: [*:0]const u8, to: [*:0]const u8) c_int;
 const O_WRONLY = 0x1;
 const O_CREAT = 0x200;
 const O_TRUNC = 0x400;
+const F_OK = 0;
 const dir = "Library/Application Support/nanokeep";
 pub const save_every = 300;
+
+const per_pick = 4;
+const max_picks = 8;
+const recency_tiers = [_]struct { within: i64, boost: i32 }{
+    .{ .within = std.time.s_per_hour, .boost = 24 },
+    .{ .within = std.time.s_per_day, .boost = 16 },
+    .{ .within = std.time.s_per_week, .boost = 8 },
+    .{ .within = 30 * std.time.s_per_day, .boost = 4 },
+};
 
 pub const Use = struct { at: i64 = 0, picks: u32 = 0 };
 
@@ -70,9 +80,12 @@ pub const Ledger = struct {
     pub fn boost(l: *const Ledger, bundle: []const u8, now: i64) i32 {
         const u = l.seen.get(bundle) orelse return 0;
         const age = now - u.at;
-        const day = std.time.s_per_day;
-        const recent: i32 = if (u.at == 0) 0 else if (age < std.time.s_per_hour) 24 else if (age < day) 16 else if (age < 7 * day) 8 else if (age < 30 * day) 4 else 0;
-        return recent + 4 * @as(i32, @intCast(@min(u.picks, 8)));
+        var recent: i32 = 0;
+        if (u.at != 0) for (recency_tiers) |tier| if (age < tier.within) {
+            recent = tier.boost;
+            break;
+        };
+        return recent + per_pick * @as(i32, @intCast(@min(u.picks, max_picks)));
     }
 
     pub fn apply(l: *const Ledger, list: []apps.AppInfo) bool {
@@ -115,7 +128,7 @@ pub const Ledger = struct {
     fn exists(gpa: std.mem.Allocator, bundle: []const u8) bool {
         const z = gpa.dupeSentinel(u8, bundle, 0) catch return true;
         defer gpa.free(z);
-        return bundle.len > 0 and access(z, 0) == 0;
+        return bundle.len > 0 and access(z, F_OK) == 0;
     }
 
     pub fn save(l: *Ledger) !void {

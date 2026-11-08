@@ -14,7 +14,10 @@ const DT_DIR = @import("dir.zig").DT_DIR;
 const DT_REG = @import("dir.zig").DT_REG;
 
 const CLOCK_MONOTONIC_RAW = 4;
-const stale_seconds = 3 * 24 * 3600;
+const F_OK = 0;
+const stale_seconds = 3 * std.time.s_per_day;
+const max_session_depth = 4;
+const rm_forever = [_][]const u8{ "/bin/rm", "-rf", "--" };
 
 pub const Kind = enum { caches, packages, developer, agents, installers, logs, temporary, trash };
 
@@ -22,7 +25,7 @@ pub const Filter = enum { any, not_apple, installer };
 
 pub const SourceKind = enum { children, worktrees, temp, sessions };
 
-const session_age = 30 * 24 * 3600;
+const session_age = 30 * std.time.s_per_day;
 
 pub const Source = struct { dir: []const u8 = "", filter: Filter = .any, kind: SourceKind = .children };
 
@@ -205,16 +208,16 @@ fn listSource(gpa: std.mem.Allocator, env: Env, g: *Gathered, src: Source) !void
     if (src.kind == .sessions) {
         const root = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ env.home, src.dir }, 0);
         defer gpa.free(root);
-        if (access(root, 0) != 0) return;
+        if (access(root, F_OK) != 0) return;
         return listSessions(gpa, g, root, 0);
     }
     if (src.kind == .temp and env.tmpdir.len == 0) return;
     const dir_z = if (src.kind == .temp)
-        try std.fmt.allocPrintSentinel(gpa, "{s}", .{std.mem.trimEnd(u8, env.tmpdir, "/")}, 0)
+        try gpa.dupeSentinel(u8, std.mem.trimEnd(u8, env.tmpdir, "/"), 0)
     else
         try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ env.home, src.dir }, 0);
     defer gpa.free(dir_z);
-    if (access(dir_z, 0) != 0) return;
+    if (access(dir_z, F_OK) != 0) return;
     var dir = Dir.open(dir_z) orelse {
         g.denied = true;
         return;
@@ -240,7 +243,7 @@ fn listSessions(gpa: std.mem.Allocator, g: *Gathered, dir_z: [:0]const u8, depth
     while (dir.next()) |ent| {
         const name = ent.name;
         if (!keep(.any, name)) continue;
-        if (ent.kind == DT_DIR and depth < 4) {
+        if (ent.kind == DT_DIR and depth < max_session_depth) {
             const sub = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ dir_z, name }, 0);
             defer gpa.free(sub);
             try listSessions(gpa, g, sub, depth + 1);
@@ -258,7 +261,7 @@ fn perform(gpa: std.mem.Allocator, actions: []const Action, trash_fn: TrashFn) R
     var r: Result = .{};
     var forever: std.ArrayList([]const u8) = .empty;
     defer forever.deinit(gpa);
-    forever.appendSlice(gpa, &.{ "/bin/rm", "-rf", "--" }) catch return r;
+    forever.appendSlice(gpa, &rm_forever) catch return r;
     var forever_bytes: u64 = 0;
     for (actions) |a| switch (a.how) {
         .trash => if (trash_fn(a.path)) {
@@ -276,7 +279,7 @@ fn perform(gpa: std.mem.Allocator, actions: []const Action, trash_fn: TrashFn) R
             forever_bytes += a.bytes;
         },
     };
-    if (forever.items.len > 3) {
+    if (forever.items.len > rm_forever.len) {
         const done = run.capture(gpa, forever.items) catch null;
         if (done) |d| {
             d.deinit(gpa);
@@ -367,7 +370,7 @@ pub const Cleaner = struct {
     job: ?*Job = null,
     sync: bool = false,
     on_change: ?Notify = null,
-    trash_fn: TrashFn = trashPath,
+    trash_fn: TrashFn = nanoui.shell.trash,
 
     pub fn init(gpa: std.mem.Allocator, home: []const u8, tmpdir: []const u8) Cleaner {
         var cats: [specs.len]Category = undefined;
@@ -528,6 +531,3 @@ pub const Cleaner = struct {
     }
 };
 
-fn trashPath(path: []const u8) bool {
-    return nanoui.shell.trash(path);
-}

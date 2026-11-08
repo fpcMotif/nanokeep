@@ -14,6 +14,17 @@ const DT_DIR = @import("dir.zig").DT_DIR;
 
 const CPU_ARM64: u32 = 0x0100000c;
 const CPU_X86_64: u32 = 0x01000007;
+const MH_MAGIC_64: u32 = 0xfeedfacf;
+const FAT_MAGIC: u32 = 0xcafebabe;
+const FAT_MAGIC_64: u32 = 0xcafebabf;
+const fat_arch_size = 20;
+const fat_arch_64_size = 32;
+const fat_header_size = 8;
+const max_fat_archs = 16;
+const header_read = 512;
+const O_RDONLY = 0;
+const F_OK = 0;
+const folder_depth = 1;
 
 pub const Kind = enum {
     unknown,
@@ -32,17 +43,19 @@ pub const Kind = enum {
 };
 
 pub fn kindOf(h: []const u8) Kind {
-    if (h.len < 8) return .unknown;
-    const le = std.mem.readInt(u32, h[0..4], .little);
-    if (le == 0xfeedfacf) return archKind(std.mem.readInt(u32, h[4..8], .little) == CPU_ARM64, std.mem.readInt(u32, h[4..8], .little) == CPU_X86_64);
+    if (h.len < fat_header_size) return .unknown;
+    if (std.mem.readInt(u32, h[0..4], .little) == MH_MAGIC_64) {
+        const cpu = std.mem.readInt(u32, h[4..8], .little);
+        return archKind(cpu == CPU_ARM64, cpu == CPU_X86_64);
+    }
     const be = std.mem.readInt(u32, h[0..4], .big);
-    if (be != 0xcafebabe and be != 0xcafebabf) return .unknown;
+    if (be != FAT_MAGIC and be != FAT_MAGIC_64) return .unknown;
     const n = std.mem.readInt(u32, h[4..8], .big);
-    const step: usize = if (be == 0xcafebabf) 32 else 20;
+    const step: usize = if (be == FAT_MAGIC_64) fat_arch_64_size else fat_arch_size;
     var arm = false;
     var x86 = false;
-    for (0..@min(n, 16)) |i| {
-        const off = 8 + i * step;
+    for (0..@min(n, max_fat_archs)) |i| {
+        const off = fat_header_size + i * step;
         if (off + 4 > h.len) break;
         const cpu = std.mem.readInt(u32, h[off..][0..4], .big);
         arm = arm or cpu == CPU_ARM64;
@@ -118,7 +131,7 @@ const Listing = struct {
     }
 
     fn list(l: *Listing) void {
-        for (l.inv.dirs) |dir| l.listDir(dir, 1) catch {};
+        for (l.inv.dirs) |dir| l.listDir(dir, folder_depth) catch {};
         std.mem.sort(AppInfo, l.apps.items, {}, struct {
             fn lt(_: void, a: AppInfo, b: AppInfo) bool {
                 return std.ascii.orderIgnoreCase(a.name, b.name) == .lt;
@@ -146,14 +159,13 @@ const Listing = struct {
 
     fn add(l: *Listing, path: []const u8) !void {
         const gpa = l.inv.gpa;
-        const base = std.fs.path.basename(path);
         var info: AppInfo = .{ .path = try gpa.dupeSentinel(u8, path, 0), .name = undefined, .version = undefined };
         errdefer gpa.free(info.path);
         const plist_path = try std.fmt.allocPrintSentinel(gpa, "{s}/Contents/Info.plist", .{path}, 0);
         defer gpa.free(plist_path);
         const data = plist.readFile(gpa, plist_path) catch try gpa.alloc(u8, 0);
         defer gpa.free(data);
-        info.name = try firstString(gpa, data, &.{ "CFBundleDisplayName", "CFBundleName" }) orelse try gpa.dupe(u8, base[0 .. base.len - 4]);
+        info.name = try firstString(gpa, data, &.{ "CFBundleDisplayName", "CFBundleName" }) orelse try gpa.dupe(u8, appName(path));
         errdefer gpa.free(info.name);
         info.version = try firstString(gpa, data, &.{ "CFBundleShortVersionString", "CFBundleVersion" }) orelse try gpa.alloc(u8, 0);
         errdefer gpa.free(info.version);
@@ -165,7 +177,7 @@ const Listing = struct {
         }
         const receipt = try std.fmt.allocPrintSentinel(gpa, "{s}/Contents/_MASReceipt/receipt", .{path}, 0);
         defer gpa.free(receipt);
-        info.app_store = access(receipt, 0) == 0;
+        info.app_store = access(receipt, F_OK) == 0;
         try l.apps.append(gpa, info);
     }
 };
@@ -285,6 +297,12 @@ pub const Inventory = struct {
     }
 };
 
+pub fn appName(bundle: []const u8) []const u8 {
+    const base = std.fs.path.basename(bundle);
+    const ext = ".app";
+    return if (std.mem.endsWith(u8, base, ext)) base[0 .. base.len - ext.len] else base;
+}
+
 fn firstString(gpa: std.mem.Allocator, data: []const u8, keys: []const []const u8) !?[]u8 {
     for (keys) |key| if (try plist.string(gpa, data, key)) |s| {
         if (s.len > 0) return s;
@@ -294,10 +312,10 @@ fn firstString(gpa: std.mem.Allocator, data: []const u8, keys: []const []const u
 }
 
 fn readKind(exe: [:0]const u8) Kind {
-    const fd = open(exe, 0);
+    const fd = open(exe, O_RDONLY);
     if (fd < 0) return .unknown;
     defer _ = close(fd);
-    var buf: [512]u8 = undefined;
+    var buf: [header_read]u8 = undefined;
     const n = read(fd, &buf, buf.len);
     if (n <= 0) return .unknown;
     return kindOf(buf[0..@intCast(n)]);

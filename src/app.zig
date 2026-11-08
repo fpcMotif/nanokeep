@@ -15,6 +15,16 @@ extern "c" fn time(t: ?*i64) i64;
 
 pub const interval = 2.0;
 pub const hidden_interval = 10.0;
+const min_wait = 0.05;
+const second_sample_after = 0.6;
+const max_awake = 32;
+pub const never_sampled = -std.math.inf(f64);
+const no_selection = "the process";
+
+pub const window_w = 1100;
+pub const window_h = 720;
+pub const min_window_w = 860;
+pub const min_window_h = 520;
 
 pub const Page = enum { overview, processes, cpu, memory, gpu, disk, network, energy, apps, cleanup, about };
 
@@ -26,10 +36,10 @@ pub const Range = enum {
 
     pub fn seconds(r: Range) f64 {
         return switch (r) {
-            .m1 => 60,
-            .m5 => 300,
-            .m15 => 900,
-            .h1 => 3600,
+            .m1 => std.time.s_per_min,
+            .m5 => 5 * std.time.s_per_min,
+            .m15 => 15 * std.time.s_per_min,
+            .h1 => std.time.s_per_hour,
         };
     }
 
@@ -60,12 +70,12 @@ pub const App = struct {
     toaster: nanoui.kit.Toaster,
     page: Page = .overview,
     range: Range = .h1,
-    awake: [32]iokit.Assertion = undefined,
+    awake: [max_awake]iokit.Assertion = undefined,
     awake_count: usize = 0,
     show_serial: bool = false,
     live: bool = true,
-    last: f64 = -1e9,
-    show: usize = 2,
+    last: f64 = never_sampled,
+    show: usize = @intFromEnum(groups.Show.mine),
     sort: groups.Sort = .memory,
     reversed: bool = false,
     query: nanoui.ui.TextBuffer = .{},
@@ -90,7 +100,7 @@ pub const App = struct {
     window: ?*nanoui.Window = null,
     clock: ?*const fn () f64 = null,
     send: *const fn (c_int, c_int) callconv(.c) c_int = procs.sendKill,
-    trash_app: cleaner.TrashFn = trashPath,
+    trash_app: cleaner.TrashFn = nanoui.shell.trash,
     guide: ?fda.Guide = null,
     access_fn: *const fn (*App) void = beginGuide,
 
@@ -179,7 +189,7 @@ pub const App = struct {
     pub fn tick(a: *App, t: f64) f32 {
         if (a.live and t - a.last >= interval) a.sample(t);
         a.refresh();
-        return @floatCast(@max(0.05, interval - (t - a.last)));
+        return @floatCast(@max(min_wait, interval - (t - a.last)));
     }
 
     pub fn heartbeat(a: *App, t: f64) void {
@@ -193,7 +203,7 @@ pub const App = struct {
         a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
         a.noteUsage();
         a.last = t;
-        if (a.sampler.samples == 1) a.last = t - interval + 0.6;
+        if (a.sampler.samples == 1) a.last = t - interval + second_sample_after;
     }
 
     pub fn refresh(a: *App) void {
@@ -318,10 +328,10 @@ pub const App = struct {
     }
 
     pub fn selectionName(a: *App) []const u8 {
-        const sel = a.selected orelse return "the process";
+        const sel = a.selected orelse return no_selection;
         if (sel.pid) |pid| if (a.sampler.find(pid)) |p| return p.name;
         if (a.table.group(sel.group)) |g| return g.name;
-        return "the process";
+        return no_selection;
     }
 
     pub fn quitSelected(a: *App) void {
@@ -396,7 +406,3 @@ pub const App = struct {
 };
 
 const no_expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
-
-fn trashPath(path: []const u8) bool {
-    return nanoui.shell.trash(path);
-}

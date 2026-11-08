@@ -2,6 +2,7 @@ const std = @import("std");
 const procs = @import("procs.zig");
 const fuzzy = @import("fuzzy.zig");
 const usage = @import("usage.zig");
+const appName = @import("apps.zig").appName;
 const Proc = procs.Proc;
 
 pub const Show = enum { all, apps, mine, system };
@@ -170,9 +171,4 @@ fn groupLess(o: Options, a: Group, b: Group) bool {
     const text = o.sort == .name or o.sort == .user or o.sort == .pid;
     const descending = if (text) o.reversed else !o.reversed;
     return if (descending) ord == .gt else ord == .lt;
-}
-
-pub fn appName(bundle: []const u8) []const u8 {
-    const base = std.fs.path.basename(bundle);
-    return if (std.mem.endsWith(u8, base, ".app")) base[0 .. base.len - 4] else base;
 }
