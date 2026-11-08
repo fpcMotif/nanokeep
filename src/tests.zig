@@ -109,6 +109,35 @@ fn newestTime(path: []const u8) !u64 {
     return shellNumber("/usr/bin/find '{s}' -exec /usr/bin/stat -f %m {{}} + | /usr/bin/sort -n | /usr/bin/tail -1", .{path});
 }
 
+test "a directory read lists every entry and its kind across many buffer refills" {
+    const Dir = @import("dir.zig").Dir;
+    var t = try Tmp.make();
+    defer t.remove();
+    const long: [200]u8 = @splat('n');
+    try t.sh("mkdir sub && for i in $(seq 1 600); do : > {s}$i; done", .{&long});
+    try std.testing.expectEqual(601, try shellNumber("/bin/ls -A '{s}' | /usr/bin/wc -l", .{t.path()}));
+    var d = Dir.open(t.path()) orelse return error.Open;
+    defer d.close();
+    var files: usize = 0;
+    var dirs: usize = 0;
+    while (d.next()) |e| {
+        if (std.mem.eql(u8, e.name, ".") or std.mem.eql(u8, e.name, "..")) continue;
+        if (e.kind == @import("dir.zig").DT_DIR) {
+            try std.testing.expectEqualStrings("sub", e.name);
+            dirs += 1;
+        } else {
+            try std.testing.expect(std.mem.startsWith(u8, e.name, &long));
+            files += 1;
+        }
+    }
+    try std.testing.expectEqual(600, files);
+    try std.testing.expectEqual(1, dirs);
+}
+
+test "a directory read of a missing folder fails" {
+    try std.testing.expect(@import("dir.zig").Dir.open("/nonexistent/nanokeep-dir") == null);
+}
+
 test "the walker agrees with du and find on sizes, files and change times" {
     const t = try Tmp.make();
     defer t.remove();

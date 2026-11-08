@@ -7,15 +7,14 @@ const objc = nanoui.objc;
 
 extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
 extern "c" fn time(t: ?*i64) i64;
-extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
-extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
-extern "c" fn closedir(dir: *anyopaque) c_int;
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+
+const Dir = @import("dir.zig").Dir;
+const DT_DIR = @import("dir.zig").DT_DIR;
+const DT_REG = @import("dir.zig").DT_REG;
 
 const CLOCK_MONOTONIC_RAW = 4;
 const stale_seconds = 3 * 24 * 3600;
-
-const Dirent = extern struct { ino: u64, seekoff: u64, reclen: u16, namlen: u16, kind: u8, name: [1024]u8 };
 
 pub const Kind = enum { caches, packages, developer, agents, installers, logs, temporary, trash };
 
@@ -72,23 +71,23 @@ pub const Item = struct {
     path: [:0]u8,
     repo: ?[:0]u8 = null,
     size: walk.Size = .{},
-
-    fn free(it: Item, gpa: std.mem.Allocator) void {
-        gpa.free(it.path);
-        if (it.repo) |r| gpa.free(r);
-    }
 };
 
 pub const Gathered = struct {
     items: std.ArrayList(Item) = .empty,
     denied: bool = false,
-
-    fn clear(g: *Gathered, gpa: std.mem.Allocator) void {
-        for (g.items.items) |it| it.free(gpa);
-        g.items.clearRetainingCapacity();
-        g.denied = false;
-    }
 };
+
+fn keepItems(gpa: std.mem.Allocator, from: Gathered) Gathered {
+    var g: Gathered = .{ .denied = from.denied };
+    g.items.ensureTotalCapacityPrecise(gpa, from.items.items.len) catch return g;
+    for (from.items.items) |it| {
+        const path = gpa.dupeSentinel(u8, it.path, 0) catch break;
+        const repo = if (it.repo) |r| gpa.dupeSentinel(u8, r, 0) catch break else null;
+        g.items.appendAssumeCapacity(.{ .path = path, .repo = repo, .size = it.size });
+    }
+    return g;
+}
 
 pub const Category = struct {
     spec: *const Spec,
@@ -152,7 +151,7 @@ pub const Progress = struct {
     listed: std.atomic.Value(u64) = .init(0),
 };
 
-pub const Caches = struct { old: *const walk.Cache, new: *walk.Cache };
+pub const Caches = struct { old: *const walk.Cache, new: *walk.Cache, gpa: std.mem.Allocator };
 
 pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *const Spec, progress: *Progress, caches: Caches) void {
     for (spec.sources) |src| listSource(gpa, env, g, src) catch {};
@@ -175,9 +174,9 @@ pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *co
     const out = gpa.alloc(walk.Size, n) catch return;
     defer gpa.free(out);
     @memset(out, .{});
-    var pool: walk.Pool = .{ .gpa = gpa, .paths = paths, .out = out, .stop = &progress.stop, .measured = &progress.measured, .listed = &progress.listed, .prev = prev, .trees = trees };
+    var pool: walk.Pool = .{ .gpa = caches.gpa, .paths = paths, .out = out, .stop = &progress.stop, .measured = &progress.measured, .listed = &progress.listed, .prev = prev, .trees = trees };
     pool.run();
-    for (paths[0..cached], trees) |p, t| if (t) |tree| caches.new.put(gpa, p, tree);
+    for (paths[0..cached], trees) |p, t| if (t) |tree| caches.new.put(caches.gpa, p, tree);
     for (g.items.items, out) |*it, size| it.size = size;
     if (age) |min_age| {
         var k: usize = 0;
@@ -185,7 +184,6 @@ pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *co
             const it = g.items.items[k];
             if (env.now - it.size.newest < min_age) {
                 _ = progress.measured.fetchSub(it.size.bytes, .monotonic);
-                it.free(gpa);
                 _ = g.items.swapRemove(k);
             } else k += 1;
         }
@@ -217,13 +215,13 @@ fn listSource(gpa: std.mem.Allocator, env: Env, g: *Gathered, src: Source) !void
         try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ env.home, src.dir }, 0);
     defer gpa.free(dir_z);
     if (access(dir_z, 0) != 0) return;
-    const dir = opendir(dir_z) orelse {
+    var dir = Dir.open(dir_z) orelse {
         g.denied = true;
         return;
     };
-    defer _ = closedir(dir);
-    while (readdir(dir)) |ent| {
-        const name = ent.name[0..ent.namlen];
+    defer dir.close();
+    while (dir.next()) |ent| {
+        const name = ent.name;
         if (!keep(src.filter, name)) continue;
         const path = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ dir_z, name }, 0);
         g.items.append(gpa, .{ .path = path }) catch {
@@ -234,15 +232,13 @@ fn listSource(gpa: std.mem.Allocator, env: Env, g: *Gathered, src: Source) !void
 }
 
 fn listSessions(gpa: std.mem.Allocator, g: *Gathered, dir_z: [:0]const u8, depth: usize) !void {
-    const DT_DIR = 4;
-    const DT_REG = 8;
-    const dir = opendir(dir_z) orelse {
+    var dir = Dir.open(dir_z) orelse {
         g.denied = true;
         return;
     };
-    defer _ = closedir(dir);
-    while (readdir(dir)) |ent| {
-        const name = ent.name[0..ent.namlen];
+    defer dir.close();
+    while (dir.next()) |ent| {
+        const name = ent.name;
         if (!keep(.any, name)) continue;
         if (ent.kind == DT_DIR and depth < 4) {
             const sub = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ dir_z, name }, 0);
@@ -301,6 +297,8 @@ const Job = struct {
     progress: Progress = .{},
     done: std.atomic.Value(usize) = .init(0),
     cache: walk.Cache = .{},
+    found_mem: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
+    cache_mem: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
 
     fn work(j: *Job) void {
         j.execute(true);
@@ -312,9 +310,14 @@ const Job = struct {
             j.result = perform(j.cl.gpa, j.actions, j.cl.trash_fn);
             return;
         }
+        var scratch: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        defer scratch.deinit();
         for (&j.lists, &specs, 0..) |*g, *spec, i| {
             if (j.progress.stop.load(.monotonic)) return;
-            measureCategory(j.cl.gpa, j.env, g, spec, &j.progress, .{ .old = &j.cl.cache, .new = &j.cache });
+            _ = scratch.reset(.retain_capacity);
+            var gathered: Gathered = .{};
+            measureCategory(scratch.allocator(), j.env, &gathered, spec, &j.progress, .{ .old = &j.cl.cache, .new = &j.cache, .gpa = j.cache_mem.allocator() });
+            g.* = keepItems(j.found_mem.allocator(), gathered);
             if (j.progress.stop.load(.monotonic)) return;
             j.done.store(i + 1, .release);
             if (threaded) objc.dispatchMain(j, stepped);
@@ -333,16 +336,13 @@ const Job = struct {
     }
 
     fn destroy(j: *Job, gpa: std.mem.Allocator) void {
-        for (&j.lists) |*g| {
-            g.clear(gpa);
-            g.items.deinit(gpa);
-        }
         for (j.actions) |a| {
             gpa.free(a.path);
             if (a.repo) |r| gpa.free(r);
         }
         gpa.free(j.actions);
-        j.cache.deinit(gpa);
+        j.found_mem.deinit();
+        j.cache_mem.deinit();
         gpa.destroy(j);
     }
 };
@@ -359,6 +359,8 @@ pub const Cleaner = struct {
     scan_ms: u64 = 0,
     listed: u64 = 0,
     cache: walk.Cache = .{},
+    found_mem: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
+    cache_mem: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
     applied: usize = 0,
     cancelled: bool = false,
     last: ?Result = null,
@@ -380,11 +382,8 @@ pub const Cleaner = struct {
             j.destroy(cl.gpa);
             cl.job = null;
         }
-        for (&cl.cats) |*cat| {
-            cat.found.clear(cl.gpa);
-            cat.found.items.deinit(cl.gpa);
-        }
-        cl.cache.deinit(cl.gpa);
+        cl.found_mem.deinit();
+        cl.cache_mem.deinit();
     }
 
     pub fn total(cl: *const Cleaner) u64 {
@@ -420,9 +419,11 @@ pub const Cleaner = struct {
     pub fn scan(cl: *Cleaner) void {
         if (cl.job != null) return;
         for (&cl.cats) |*cat| {
-            cat.found.clear(cl.gpa);
+            cat.found = .{};
             cat.measured = false;
         }
+        cl.found_mem.deinit();
+        cl.found_mem = .init(std.heap.page_allocator);
         cl.applied = 0;
         cl.cancelled = false;
         cl.scanned = false;
@@ -509,12 +510,14 @@ pub const Cleaner = struct {
             return cl.scan();
         }
         cl.apply(j);
+        std.mem.swap(std.heap.ArenaAllocator, &cl.found_mem, &j.found_mem);
         cl.scan_ms = (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) -| cl.started) / std.time.ns_per_ms;
         cl.listed = j.progress.listed.load(.monotonic);
         if (cl.applied == specs.len) {
             cl.scanned = true;
             cl.scanned_at = j.env.now;
             std.mem.swap(walk.Cache, &cl.cache, &j.cache);
+            std.mem.swap(std.heap.ArenaAllocator, &cl.cache_mem, &j.cache_mem);
         }
         j.destroy(cl.gpa);
         cl.tell();

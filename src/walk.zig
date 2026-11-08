@@ -481,7 +481,7 @@ pub const Pool = struct {
 
     fn work(pool: *Pool) void {
         const cancel = pool.stop orelse &pool.cancel;
-        var arena: std.heap.ArenaAllocator = .init(pool.gpa);
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
         defer arena.deinit();
         var w: Walk = .{ .gpa = arena.allocator(), .cancel = cancel, .limit = if (pool.trees.len > 0) pool.limit else 0 };
         while (!pool.cancel.load(.monotonic) and !cancel.load(.monotonic)) {

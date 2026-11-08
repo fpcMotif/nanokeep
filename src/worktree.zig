@@ -2,12 +2,9 @@ const std = @import("std");
 const run = @import("run.zig");
 
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
-extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
-extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
-extern "c" fn closedir(dir: *anyopaque) c_int;
 
-const Dirent = extern struct { ino: u64, seekoff: u64, reclen: u16, namlen: u16, kind: u8, name: [1024]u8 };
-const DT_DIR = 4;
+const Dir = @import("dir.zig").Dir;
+const DT_DIR = @import("dir.zig").DT_DIR;
 
 pub const git = "/usr/bin/git";
 
@@ -68,11 +65,11 @@ fn isRepo(gpa: std.mem.Allocator, dir: []const u8) bool {
 fn collect(gpa: std.mem.Allocator, out: *std.ArrayList([:0]u8), dir: [:0]const u8, depth: u8) !void {
     if (isRepo(gpa, dir)) try out.append(gpa, try gpa.dupeSentinel(u8, dir, 0));
     if (depth == 0) return;
-    const d = opendir(dir) orelse return;
-    defer _ = closedir(d);
-    while (readdir(d)) |ent| {
+    var d = Dir.open(dir) orelse return;
+    defer d.close();
+    while (d.next()) |ent| {
         if (ent.kind != DT_DIR) continue;
-        const name = ent.name[0..ent.namlen];
+        const name = ent.name;
         if (name.len == 0 or name[0] == '.') continue;
         if (isSkipped(name)) continue;
         const child = try std.fmt.allocPrintSentinel(gpa, "{s}/{s}", .{ dir, name }, 0);

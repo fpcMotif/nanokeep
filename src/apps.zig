@@ -4,16 +4,13 @@ const walk = @import("walk.zig");
 const plist = @import("plist.zig");
 const objc = nanoui.objc;
 
-extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
-extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
-extern "c" fn closedir(dir: *anyopaque) c_int;
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
 extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
 extern "c" fn read(fd: c_int, buf: [*]u8, n: usize) isize;
 extern "c" fn close(fd: c_int) c_int;
 
-const Dirent = extern struct { ino: u64, seekoff: u64, reclen: u16, namlen: u16, kind: u8, name: [1024]u8 };
-const DT_DIR = 4;
+const Dir = @import("dir.zig").Dir;
+const DT_DIR = @import("dir.zig").DT_DIR;
 
 const CPU_ARM64: u32 = 0x0100000c;
 const CPU_X86_64: u32 = 0x01000007;
@@ -133,11 +130,11 @@ const Listing = struct {
         const gpa = l.inv.gpa;
         const dir_z = try gpa.dupeSentinel(u8, dir, 0);
         defer gpa.free(dir_z);
-        const d = opendir(dir_z) orelse return;
-        defer _ = closedir(d);
-        while (readdir(d)) |ent| {
+        var d = Dir.open(dir_z) orelse return;
+        defer d.close();
+        while (d.next()) |ent| {
             if (ent.kind != DT_DIR) continue;
-            const name = ent.name[0..ent.namlen];
+            const name = ent.name;
             if (name.len == 0 or name[0] == '.') continue;
             const path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir, name });
             defer gpa.free(path);
