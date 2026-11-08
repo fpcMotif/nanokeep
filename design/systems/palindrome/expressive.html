@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Palindrome</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@500;700;800&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #120A18; --ink-2: #1B1124; --ink-3: #251832; --hair: #2E2138;
+  --violet: #9229DB; --violet-hi: #C08AF0; --violet-dim: #4A1F6B;
+  --sand: #EABD86; --sand-dim: #5C4630;
+  --lime: #ABD86F; --lime-dim: #3F5230;
+  --text: #EFE6F4; --muted: #8A7B96; --danger: #FF6B6B;
+  --u: 9px;
+  --r-l: 9px 2px 2px 9px; --r-r: 2px 9px 9px 2px; --r-c: 9px 2px 9px 2px;
+  --display: "Syne", sans-serif; --body: "Hanken Grotesk", sans-serif; --mono: "JetBrains Mono", monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ink: #F6F1EA; --ink-2: #FFFCF7; --ink-3: #EFE7DC; --hair: #E0D4C6;
+    --violet: #7A1FBA; --violet-hi: #7A1FBA; --violet-dim: #E6D3F5;
+    --sand: #B07A3A; --sand-dim: #F2E1C9; --lime: #5E8A2A; --lime-dim: #DDEBC8;
+    --text: #1E1424; --muted: #75687F; --danger: #D33A3A;
+  }
+}
+:root[data-theme="light"] {
+  --ink: #F6F1EA; --ink-2: #FFFCF7; --ink-3: #EFE7DC; --hair: #E0D4C6;
+  --violet: #7A1FBA; --violet-hi: #7A1FBA; --violet-dim: #E6D3F5;
+  --sand: #B07A3A; --sand-dim: #F2E1C9; --lime: #5E8A2A; --lime-dim: #DDEBC8;
+  --text: #1E1424; --muted: #75687F; --danger: #D33A3A;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--ink); color: var(--text); font: 400 14px/1.5 var(--body); -webkit-font-smoothing: antialiased; }
+.num, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.page { max-width: 1320px; margin: 0 auto; padding: calc(var(--u)*7) 16px calc(var(--u)*12); }
+.lbl { font: 500 10.5px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+
+/* hero */
+.hero { display: grid; grid-template-columns: 7fr 1fr 7fr; align-items: end; min-height: 260px; border-bottom: 1px solid var(--hair); padding-bottom: calc(var(--u)*4); }
+.hero h1 { font: 800 clamp(48px, 9vw, 120px)/.9 var(--display); letter-spacing: -.04em; }
+.hero h1.mir { transform: scaleX(-1); color: transparent; -webkit-text-stroke: 1px var(--hair); text-align: left; }
+.hero .spine { justify-self: center; width: 1px; height: 100%; background: linear-gradient(var(--violet), transparent); }
+.lede { display: grid; grid-template-columns: 7fr 1fr 7fr; gap: 0; margin-top: calc(var(--u)*3); color: var(--muted); }
+.lede p { max-width: 52ch; }
+.lede p:last-child { grid-column: 3; }
+.toggle { position: fixed; top: 12px; right: 12px; z-index: 5; background: var(--ink-2); color: var(--text); border: 1px solid var(--hair); border-radius: var(--r-c); padding: 6px 12px; font: 500 12px var(--mono); cursor: pointer; }
+
+section { margin-top: calc(var(--u)*10); }
+section > header { display: flex; justify-content: space-between; align-items: baseline; gap: 18px; margin-bottom: calc(var(--u)*3); flex-wrap: wrap; }
+section h2 { font: 700 30px/1.1 var(--display); letter-spacing: -.02em; }
+section header p { color: var(--muted); max-width: 60ch; }
+
+/* tokens */
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px; }
+.sw { display: grid; gap: 6px; }
+.sw i { display: block; height: 72px; border-radius: var(--r-l); border: 1px solid var(--hair); }
+.sw:nth-child(even) i { border-radius: var(--r-r); }
+.sw b { font: 600 13px var(--body); }
+.sw span { font: 400 11px var(--mono); color: var(--muted); }
+.typescale { display: grid; gap: 18px; }
+.typescale div { display: grid; grid-template-columns: 140px 1fr; align-items: baseline; gap: 18px; border-bottom: 1px solid var(--hair); padding-bottom: 12px; }
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+.rule { background: var(--ink-2); border: 1px solid var(--hair); border-radius: var(--r-l); padding: 18px; }
+.rule:nth-child(even) { border-radius: var(--r-r); }
+.rule h3 { font: 700 16px var(--display); margin-bottom: 6px; }
+.rule p { color: var(--muted); font-size: 13px; }
+.rule svg { display: block; margin-bottom: 12px; }
+
+/* window shell */
+.frame { overflow-x: auto; border-radius: 12px; }
+.win { width: 1240px; height: 780px; display: grid; grid-template-columns: 216px 1fr; background: var(--ink); border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; box-shadow: 0 30px 80px -30px rgb(0 0 0 / .6); }
+.side { background: var(--ink-2); border-right: 1px solid var(--hair); padding: 14px 10px; display: flex; flex-direction: column; gap: 2px; }
+.lights { display: flex; gap: 8px; padding: 2px 8px 18px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; background: var(--hair); }
+.brand { font: 800 15px var(--display); padding: 0 8px 14px; letter-spacing: -.01em; }
+.brand em { font-style: normal; color: var(--violet-hi); }
+.navh { font: 500 9.5px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); padding: 12px 8px 6px; }
+.nav { display: grid; grid-template-columns: 16px 1fr auto; gap: 10px; align-items: center; padding: 7px 8px; border-radius: var(--r-l); color: var(--muted); font-weight: 500; }
+.nav.on { background: var(--violet-dim); color: var(--text); box-shadow: inset 2px 0 0 var(--violet); }
+.nav .dot { width: 8px; height: 8px; border-radius: 2px; justify-self: center; }
+.nav .num { font-size: 11px; }
+.side .foot { margin-top: auto; padding: 8px; font-size: 12px; color: var(--muted); }
+.side .foot b { display: block; color: var(--text); font: 700 13px var(--display); }
+.main { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.top { display: flex; align-items: center; gap: 12px; padding: 18px 27px 14px; border-bottom: 1px solid var(--hair); }
+.top h3 { font: 700 24px/1 var(--display); letter-spacing: -.02em; }
+.top .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.top .grow { flex: 1; }
+.body { padding: 18px 27px; flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 18px; }
+.status { display: flex; gap: 18px; justify-content: flex-end; padding: 8px 27px; border-top: 1px solid var(--hair); font: 400 11px var(--mono); color: var(--muted); }
+.status i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 6px; }
+
+/* controls */
+.btn { font: 600 12px var(--body); padding: 7px 14px; border-radius: var(--r-c); border: 1px solid var(--hair); background: var(--ink-3); color: var(--text); white-space: nowrap; }
+.btn.pri { background: var(--violet); border-color: var(--violet); color: #fff; }
+.btn.lime { background: var(--lime); border-color: var(--lime); color: #17200c; }
+.btn.danger { background: transparent; border-color: var(--danger); color: var(--danger); }
+.btn.ghost { background: transparent; }
+.seg { display: flex; background: var(--ink-3); border: 1px solid var(--hair); border-radius: var(--r-c); padding: 2px; }
+.seg span { padding: 5px 12px; font-size: 12px; color: var(--muted); border-radius: 7px 2px 7px 2px; }
+.seg span.on { background: var(--ink); color: var(--text); }
+.search { width: 200px; padding: 7px 12px; border: 1px solid var(--hair); border-radius: var(--r-c); color: var(--muted); font-size: 12px; background: var(--ink); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 500 10.5px var(--mono); padding: 3px 8px; border-radius: 99px; background: var(--ink-3); color: var(--muted); border: 1px solid var(--hair); }
+.pill.lime { color: var(--lime); border-color: var(--lime-dim); }
+.pill.violet { color: var(--violet-hi); border-color: var(--violet-dim); }
+.pill.sand { color: var(--sand); border-color: var(--sand-dim); }
+.card { background: var(--ink-2); border: 1px solid var(--hair); border-radius: var(--r-l); padding: 18px; min-width: 0; }
+.card.r { border-radius: var(--r-r); }
+.card h4 { font: 500 10.5px var(--mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; display: flex; justify-content: space-between; }
+.big { font: 800 44px/1 var(--display); letter-spacing: -.03em; }
+.big small { font: 500 14px var(--mono); color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+
+/* 717 grid */
+.g717 { display: grid; grid-template-columns: 7fr 1fr 7fr; }
+.g717 > .ax { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+.g717 > .ax::before { content: ""; position: absolute; inset: 0 50%; width: 1px; background: var(--violet); opacity: .6; }
+.g717 > .ax span { position: relative; background: var(--ink); padding: 4px 0; font: 500 9.5px var(--mono); letter-spacing: .16em; color: var(--muted); writing-mode: vertical-rl; }
+
+/* mirrored table */
+.mt { display: grid; font-size: 13px; }
+.mt .row { display: grid; grid-template-columns: 54px 1fr 230px 1fr 76px; align-items: center; gap: 10px; height: 36px; border-bottom: 1px solid color-mix(in srgb, var(--hair) 60%, transparent); }
+.mt .row.head { height: 30px; font: 500 10px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.mt .row.sel { background: color-mix(in srgb, var(--violet) 16%, transparent); border-radius: 6px; }
+.mt .l { text-align: right; }
+.mt .bar { height: 10px; display: flex; }
+.mt .bar.left { justify-content: flex-end; }
+.mt .bar i { display: block; height: 100%; }
+.mt .bar.left i { border-radius: 5px 0 0 5px; }
+.mt .bar.right i { border-radius: 0 5px 5px 0; }
+.mt .name { display: flex; align-items: center; justify-content: center; gap: 8px; border-inline: 1px solid var(--violet-dim); height: 100%; padding: 0 10px; min-width: 0; }
+.mt .name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt .name .pill { padding: 1px 6px; }
+.mt .row.head .name { border-color: transparent; }
+
+/* misc */
+.cols { display: grid; gap: 18px; }
+.list { display: grid; }
+.list .it { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--hair); font-size: 13px; }
+.chk { width: 14px; height: 14px; border-radius: 4px 1px 4px 1px; border: 1.5px solid var(--muted); }
+.chk.on { background: var(--lime); border-color: var(--lime); }
+.chk.vi { background: var(--violet); border-color: var(--violet); }
+.muted { color: var(--muted); }
+svg text { font-family: var(--mono); }
+.caption { display: flex; justify-content: space-between; margin-top: 12px; color: var(--muted); font-size: 13px; gap: 18px; flex-wrap: wrap; }
+.caption b { color: var(--text); font-weight: 600; }
+
+/* popover */
+.pop { width: 340px; background: var(--ink-2); border: 1px solid var(--hair); border-radius: 14px; padding: 16px; box-shadow: 0 30px 80px -30px rgb(0 0 0 / .7); display: grid; gap: 14px; }
+.menubar { width: 100%; height: 30px; background: color-mix(in srgb, var(--ink-3) 80%, transparent); border: 1px solid var(--hair); border-radius: 10px 10px 0 0; display: flex; justify-content: flex-end; align-items: center; gap: 16px; padding: 0 14px; font: 500 11px var(--mono); color: var(--muted); }
+.menubar .me { color: var(--text); background: var(--violet-dim); padding: 2px 8px; border-radius: 4px; }
+.stage { background: radial-gradient(circle at 70% 0%, var(--violet-dim), transparent 60%), var(--ink-3); border: 1px solid var(--hair); border-radius: 12px; height: 560px; width: 1240px; overflow: hidden; }
+.anatomy { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+@keyframes pulse { 50% { opacity: .3; } }
+.pulse { animation: pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+@media (max-width: 720px) {
+  .hero, .lede { grid-template-columns: 1fr; }
+  .hero .spine, .hero h1.mir { display: none; }
+  .lede p:last-child { grid-column: 1; }
+}
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">light / dark</button>
+<div class="page">
+
+<div class="hero">
+  <div><div class="lbl" style="margin-bottom:18px">nanokeep · design system 02</div><h1>Palin&shy;drome</h1></div>
+  <div class="spine"></div>
+  <h1 class="mir" aria-hidden="true">Palin&shy;drome</h1>
+</div>
+<div class="lede">
+  <p>One idea runs through every screen. Each measurement has a pair, and the pair meets at a spine. Upload faces download. CPU faces memory. Space you take back faces space you keep.</p>
+  <div></div>
+  <p>The system covers the three jobs of nanokeep: watching processes, watching the network, and cleaning disk space. Every screen below is one window at 1240 × 780.</p>
+</div>
+
+<section>
+  <header><h2>Colour</h2><p>Three signal colours, each with one job. Violet is the spine and the CPU. Sand is memory and download. Lime is upload and reclaimed space.</p></header>
+  <div class="swatches" id="swatches"></div>
+</section>
+
+<section>
+  <header><h2>Type</h2><p>Syne carries headlines and hero numbers. Hanken Grotesk carries reading text. Every number on a data surface is JetBrains Mono with tabular figures.</p></header>
+  <div class="typescale">
+    <div><span class="lbl">Hero · Syne 800</span><span style="font:800 56px/1 var(--display);letter-spacing:-.03em">18.4 GB</span></div>
+    <div><span class="lbl">Title · Syne 700</span><span style="font:700 24px var(--display)">Processes</span></div>
+    <div><span class="lbl">Body · Hanken 400</span><span>Items go to the Trash first. Nothing is deleted until you empty it.</span></div>
+    <div><span class="lbl">Data · Mono 400</span><span class="num">10.9 GB · 3.7% · PID 18362 · 2:06:06</span></div>
+    <div><span class="lbl">Label · Mono 500</span><span class="lbl" style="color:var(--text)">Memory pressure</span></div>
+  </div>
+</section>
+
+<section>
+  <header><h2>Rules</h2><p>Four rules that every screen follows.</p></header>
+  <div class="rules">
+    <div class="rule"><svg width="100%" height="64" viewBox="0 0 240 64"><line x1="120" y1="0" x2="120" y2="64" stroke="var(--violet)"/><rect x="40" y="14" width="78" height="12" rx="2" fill="var(--violet)"/><rect x="122" y="14" width="96" height="12" rx="2" fill="var(--sand)"/><rect x="70" y="38" width="48" height="12" rx="2" fill="var(--violet)" opacity=".6"/><rect x="122" y="38" width="40" height="12" rx="2" fill="var(--sand)" opacity=".6"/></svg><h3>The spine</h3><p>Paired values grow away from one shared axis. You compare both sides at a glance and never read a legend.</p></div>
+    <div class="rule"><svg width="100%" height="64" viewBox="0 0 240 64"><g fill="none" stroke="var(--muted)"><rect x="10" y="8" width="100" height="48" rx="0" style="rx:0"/></g><path d="M19 8H110V56H19A9 9 0 0 1 10 47V17A9 9 0 0 1 19 8Z" fill="var(--ink-3)" stroke="var(--hair)"/><path d="M130 8H221A9 9 0 0 1 230 17V47A9 9 0 0 1 221 56H130Z" fill="var(--ink-3)" stroke="var(--hair)"/></svg><h3>Mirrored corners</h3><p>Cards on the left round their outer corners 9 px and their inner corners 2 px. Cards on the right do the reverse.</p></div>
+    <div class="rule"><svg width="100%" height="64" viewBox="0 0 240 64"><rect x="0" y="10" width="105" height="44" fill="var(--ink-3)"/><rect x="112" y="10" width="16" height="44" fill="var(--violet-dim)"/><rect x="135" y="10" width="105" height="44" fill="var(--ink-3)"/><text x="52" y="36" fill="var(--muted)" font-size="11" text-anchor="middle">7</text><text x="120" y="36" fill="var(--text)" font-size="11" text-anchor="middle">1</text><text x="187" y="36" fill="var(--muted)" font-size="11" text-anchor="middle">7</text></svg><h3>The 7 · 1 · 7 grid</h3><p>Paired views split into seven parts, one part, and seven parts. The narrow centre column holds the axis and its labels.</p></div>
+    <div class="rule"><svg width="100%" height="64" viewBox="0 0 240 64"><g fill="var(--violet)"><rect x="0" y="40" width="3" height="3"/><rect x="9" y="37" width="6" height="6"/><rect x="24" y="34" width="9" height="9"/><rect x="42" y="25" width="18" height="18"/><rect x="69" y="16" width="27" height="27"/><rect x="105" y="-2" width="45" height="45"/></g></svg><h3>Nine</h3><p>Spacing steps are 3, 6, 9, 18, 27 and 45 px. Padding inside a window is 18 px top and 27 px at the sides.</p></div>
+  </div>
+</section>
+
+<section>
+  <header><h2>Components</h2><p>The parts every screen is built from.</p></header>
+  <div class="anatomy" id="components"></div>
+</section>
+
+<div id="screens"></div>
+
+</div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+let seed = 9229;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+
+try { const t = localStorage.getItem("palindrome-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+$("#theme").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("palindrome-theme", root.dataset.theme); } catch {}
+};
+
+$("#swatches").innerHTML = [
+  ["Ink", "--ink", "Window background"], ["Ink 2", "--ink-2", "Cards, sidebar"], ["Ink 3", "--ink-3", "Controls"], ["Hairline", "--hair", "Borders, rules"],
+  ["Violet", "--violet", "Spine, CPU, primary"], ["Sand", "--sand", "Memory, download"], ["Lime", "--lime", "Upload, reclaimed"], ["Danger", "--danger", "Force Quit only"],
+  ["Text", "--text", "Primary text"], ["Muted", "--muted", "Labels, secondary"],
+].map(([n, v, use]) => `<div class="sw"><i style="background:var(${v})"></i><b>${n}</b><span>${v} · ${use}</span></div>`).join("");
+
+const NAV = [
+  ["Overview", null, "var(--muted)"], ["Processes", "849", "var(--violet)"], ["Network", "25.6 MB/s", "var(--lime)"], ["Cleanup", "18.4 GB", "var(--lime)"],
+  ["—Hardware"], ["CPU", "33%", "var(--violet)"], ["Memory", "84%", "var(--sand)"], ["Disk", "412 GB", "var(--sand)"], ["Energy", "6 W", "var(--muted)"],
+];
+function shell(active, title, sub, tools, body, status = true) {
+  const nav = NAV.map(n => n[0][0] === "—" ? `<div class="navh">${n[0].slice(1)}</div>` :
+    `<div class="nav${n[0] === active ? " on" : ""}"><i class="dot" style="background:${n[2]}"></i><span>${n[0]}</span><span class="num">${n[1] ?? ""}</span></div>`).join("");
+  return `<div class="frame"><div class="win">
+    <aside class="side"><div class="lights"><i></i><i></i><i></i></div><div class="brand">nano<em>keep</em></div>${nav}
+      <div class="foot"><b>Mac</b>Apple M4 Pro · up 4h 20m</div></aside>
+    <div class="main"><div class="top"><div><h3>${title}</h3><div class="sub">${sub}</div></div><div class="grow"></div>${tools}</div>
+      <div class="body">${body}</div>
+      ${status ? `<div class="status"><span><i style="background:var(--violet)"></i>CPU 33.3%</span><span><i style="background:var(--sand)"></i>Memory 21.6 GB</span><span><i style="background:var(--lime)"></i>↑ 1.8 MB/s</span><span><i style="background:var(--sand)"></i>↓ 25.6 MB/s</span></div>` : ""}
+    </div></div></div>`;
+}
+function screen(id, name, note, html, caption = "") {
+  return `<section id="${id}"><header><h2>${name}</h2><p>${note}</p></header>${html}${caption ? `<div class="caption">${caption}</div>` : ""}</section>`;
+}
+
+/* butterfly: above axis = a, below = b */
+function butterfly(w, h, n, ca, cb, scaleA = .9, scaleB = .9, labels = true) {
+  const mid = h / 2, bw = w / n;
+  let s = `<svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img">`;
+  for (let i = 0; i < n; i++) {
+    const t = i / n, wave = .45 + .4 * Math.sin(t * 9 + 2) * Math.sin(t * 2.2);
+    const a = Math.max(2, (wave * .6 + rnd() * .5) * mid * scaleA), b = Math.max(2, (wave * .8 + rnd() * .4) * mid * scaleB);
+    s += `<rect x="${i * bw + 1}" y="${mid - 2 - a}" width="${bw - 2}" height="${a}" rx="1.5" fill="${ca}" opacity="${.35 + .65 * t}"/>`;
+    s += `<rect x="${i * bw + 1}" y="${mid + 2}" width="${bw - 2}" height="${b}" rx="1.5" fill="${cb}" opacity="${.35 + .65 * t}"/>`;
+  }
+  s += `<line x1="0" x2="${w}" y1="${mid}" y2="${mid}" stroke="var(--violet)" stroke-width="1"/>`;
+  if (labels) s += `<text x="4" y="12" fill="var(--muted)" font-size="10">−5 min</text><text x="${w - 4}" y="12" fill="var(--muted)" font-size="10" text-anchor="end">now</text>`;
+  return s + `</svg>`;
+}
+/* sparkline growing away from a vertical spine */
+function spark(w, h, color, dir) {
+  const pts = []; let v = .5;
+  for (let i = 0; i <= 40; i++) { v = Math.min(.95, Math.max(.08, v + (rnd() - .5) * .25)); const x = dir > 0 ? (i / 40) * w : w - (i / 40) * w; pts.push([x, h - v * h]); }
+  const line = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join("");
+  const edge = dir > 0 ? 0 : w;
+  return `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${line}L${pts.at(-1)[0]} ${h}L${edge} ${h}Z" fill="${color}" opacity=".14"/><path d="${line}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
+}
+function bar(pct, color, side) { return `<div class="bar ${side}"><i style="width:${pct}%;background:${color}"></i></div>`; }
+
+/* ---------- components ---------- */
+$("#components").innerHTML = `
+  <div class="card"><h4>Mirrored row</h4><div class="mt">
+    <div class="row head"><span class="l">CPU</span><span></span><span class="name">Name</span><span></span><span>Mem</span></div>
+    <div class="row"><span class="l num">3.7</span>${bar(62, "var(--violet)", "left")}<span class="name"><b>canary</b><span class="pill">64</span></span>${bar(90, "var(--sand)", "right")}<span class="num">10.9 GB</span></div>
+  </div><p class="muted" style="margin-top:10px;font-size:12px">The process name sits on the spine. CPU grows left, memory grows right. A narrow width uses only the name and the larger bar.</p></div>
+  <div class="card r"><h4>Butterfly <span>↑ lime · ↓ sand</span></h4>${butterfly(300, 90, 40, "var(--lime)", "var(--sand)")}<p class="muted" style="margin-top:10px;font-size:12px">Time runs left to right. Newer bars are more opaque.</p></div>
+  <div class="card"><h4>Buttons</h4><div style="display:flex;gap:9px;flex-wrap:wrap"><span class="btn pri">Scan</span><span class="btn lime">Move to Trash</span><span class="btn">Reveal</span><span class="btn ghost">Cancel</span><span class="btn danger">Force Quit</span></div>
+    <h4 style="margin-top:18px">Segmented · Pills</h4><div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center"><div class="seg"><span>All</span><span>Apps</span><span class="on">Mine</span><span>System</span></div><span class="pill lime">● healthy</span><span class="pill sand">● pressure</span><span class="pill violet">en0</span></div></div>
+  <div class="card r"><h4>Split gauge</h4><div style="display:flex;gap:18px;align-items:center">${gauge(120, 58.8)}<div><div class="big" style="font-size:30px">412<small>GB free</small></div><div class="muted" style="font-size:12px">Left half used in violet. Right half free in lime. The seam is the spine.</div></div></div></div>`;
+
+function gauge(size, usedPct) {
+  const r = size / 2 - 8, c = size / 2, L = Math.PI * r;
+  const used = Math.min(1, usedPct / 100 * 2), free = Math.min(1, (100 - usedPct) / 100 * 2);
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <path d="M${c} ${c - r}A${r} ${r} 0 0 0 ${c} ${c + r}" fill="none" stroke="var(--violet-dim)" stroke-width="9"/>
+    <path d="M${c} ${c - r}A${r} ${r} 0 0 1 ${c} ${c + r}" fill="none" stroke="var(--lime-dim)" stroke-width="9"/>
+    <path d="M${c} ${c + r}A${r} ${r} 0 0 1 ${c} ${c - r}" fill="none" stroke="var(--violet)" stroke-width="9" stroke-dasharray="${L * used} ${L}" />
+    <path d="M${c} ${c + r}A${r} ${r} 0 0 0 ${c} ${c - r}" fill="none" stroke="var(--lime)" stroke-width="9" stroke-dasharray="${L * Math.min(1, free * .7)} ${L}"/>
+    <line x1="${c}" x2="${c}" y1="2" y2="${size - 2}" stroke="var(--violet)" stroke-width="1"/></svg>`;
+}
+
+/* ---------- screens ---------- */
+const procs = [
+  ["canary", 64, 3.7, 10.9], ["com.apple.WebKit.WebContent", 6, 0.0, 5.3], ["Claude", 28, 0.3, 3.3], ["omp", 16, 0.0, 3.1], ["claude", 11, 0.0, 3.0],
+  ["node", 39, 1.2, 2.1], ["fff-mcp", 11, 0.4, 1.4], ["Tern", 2, 0.0, 1.4], ["WeChat", 15, 0.6, 1.2], ["python3.15", 9, 0.1, .93], ["codedb", 25, 2.4, .92],
+  ["git", 15, 0.0, .86], ["Floodlight", 0, 0.0, .82], ["Xcode", 40, 0.2, .24], ["zsh", 44, 0.0, .23],
+];
+const fmtGB = g => g >= 1 ? g.toFixed(1) + " GB" : Math.round(g * 1000) + " MB";
+const procRows = procs.map((p, i) => `<div class="row${i === 2 ? " sel" : ""}"><span class="l num" style="color:${p[2] > 1 ? "var(--violet-hi)" : "var(--muted)"}">${p[2].toFixed(1)}</span>${bar(Math.min(100, p[2] * 22 + 1), "var(--violet)", "left")}<span class="name"><b>${p[0]}</b>${p[1] ? `<span class="pill">${p[1]}</span>` : ""}</span>${bar(p[3] / 10.9 * 100, p[3] > 1 ? "var(--sand)" : "var(--sand-dim)", "right")}<span class="num" style="color:${p[3] > 1 ? "var(--sand)" : "var(--text)"}">${fmtGB(p[3])}</span></div>`).join("");
+
+const S = [];
+
+S.push(screen("overview", "Overview", "Four vitals on one page. CPU and memory face each other across the spine. The network butterfly runs the full width below.",
+  shell("Overview", "Overview", "Updated every second · 849 processes", `<div class="seg"><span class="on">1 min</span><span>5 min</span><span>1 h</span></div>`, `
+  <div class="g717" style="height:210px">
+    <div class="card" style="display:flex;flex-direction:column;justify-content:space-between"><h4><span>CPU</span><span>14 cores</span></h4><div style="text-align:right"><div class="big" style="color:var(--violet-hi)">33<small>%</small></div></div>${spark(400, 90, "var(--violet)", -1)}</div>
+    <div class="ax"><span>CPU · MEMORY</span></div>
+    <div class="card r" style="display:flex;flex-direction:column;justify-content:space-between"><h4><span>Memory</span><span>24 GB</span></h4><div class="big" style="color:var(--sand)">21.6<small>GB used</small></div>${spark(400, 90, "var(--sand)", 1)}</div>
+  </div>
+  <div class="card" style="border-radius:var(--r-c)"><h4><span>Network · Wi-Fi en0</span><span><b style="color:var(--lime)">↑ 1.8 MB/s</b> &nbsp; <b style="color:var(--sand)">↓ 25.6 MB/s</b></span></h4>${butterfly(1000, 150, 90, "var(--lime)", "var(--sand)")}</div>
+  <div class="g717" style="flex:1">
+    <div class="card" style="display:flex;gap:18px;align-items:center">${gauge(110, 58.8)}<div><h4>Macintosh HD</h4><div class="big" style="font-size:32px">412<small>GB free of 1 TB</small></div></div></div>
+    <div class="ax"><span>DISK · CLEAN</span></div>
+    <div class="card r" style="display:flex;justify-content:space-between;align-items:center;gap:18px"><div><h4>Cleanup</h4><div class="big" style="font-size:32px;color:var(--lime)">18.4<small>GB reclaimable</small></div><div class="muted" style="font-size:12px">Last scan 3 days ago</div></div><span class="btn pri">Scan again</span></div>
+  </div>`)));
+
+S.push(screen("processes", "Processes", "The mirrored table. The name column is the spine. CPU grows left in violet and memory grows right in sand, so heavy rows read as wide shapes.",
+  shell("Processes", "Processes", "665 shown in 285 groups · 849 in all", `<div class="search">Search processes</div><div class="seg"><span>All</span><span>Apps</span><span class="on">Mine</span><span>System</span></div><span class="btn">Quit</span><span class="btn danger">Force Quit</span>`, `
+  <div class="mt"><div class="row head"><span class="l">% CPU</span><span style="text-align:right">◂</span><span class="name">Name</span><span>▸</span><span>Memory ▾</span></div>${procRows}</div>`),
+  `<span><b>Sort</b> by either side. The active side's label carries the ▾ caret.</span><span><b>Group</b> pills count child processes. Click a row to open the inspector.</span>`));
+
+S.push(screen("inspector", "Process inspector", "A single process, with its history reflected: CPU above the axis, memory below it. Children list on the left, facts on the right.",
+  shell("Processes", "canary", "Google Chrome Canary · PID 18362 · martinfan", `<span class="btn">Sample</span><span class="btn">Reveal</span><span class="btn">Quit</span><span class="btn danger">Force Quit</span>`, `
+  <div class="g717" style="flex:1;min-height:0">
+    <div class="card" style="overflow:hidden"><h4><span>Process tree</span><span>64</span></h4><div class="list">${["canary", "├ GPU Process", "├ Network Service", "├ Renderer · github.com", "├ Renderer · claude.ai", "├ Renderer · figma.com", "├ Renderer · docs.google.com", "├ Storage Service", "├ Audio Service", "└ Utility · 54 more"].map((n, i) => `<div class="it" style="grid-template-columns:1fr auto auto;gap:14px"><span class="mono" style="font-size:12px;color:${i ? "var(--text)" : "var(--violet-hi)"}">${n}</span><span class="num muted" style="font-size:11px">${(rnd() * 2).toFixed(1)}%</span><span class="num" style="font-size:11px;color:var(--sand)">${fmtGB(rnd() * 2.2 + .05)}</span></div>`).join("")}</div></div>
+    <div class="ax"><span>HISTORY</span></div>
+    <div class="cols" style="grid-template-rows:auto auto 1fr">
+      <div class="card r"><h4><span>CPU ↑ · Memory ↓</span><span>10 min</span></h4>${butterfly(460, 130, 60, "var(--violet)", "var(--sand)")}</div>
+      <div class="card r" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">${[["Threads", "1,449"], ["Ports", "3,210"], ["Open files", "812"], ["CPU time", "2:06:06"], ["Disk read", "786 KB/s"], ["Network", "1.2 MB/s"]].map(([k, v]) => `<div><div class="lbl">${k}</div><div class="num" style="font-size:18px;margin-top:6px">${v}</div></div>`).join("")}</div>
+      <div class="card r"><h4>Connections</h4>${[["api.anthropic.com", "443", "2.1 MB"], ["github.com", "443", "840 KB"], ["figma.com", "443", "512 KB"]].map(r => `<div class="it" style="display:grid;grid-template-columns:1fr auto auto;gap:14px;font-size:12px;padding:5px 0"><span class="mono">${r[0]}</span><span class="num muted">:${r[1]}</span><span class="num" style="color:var(--sand)">${r[2]}</span></div>`).join("")}</div>
+    </div>
+  </div>`)));
+
+const apps = [["Safari", 120, 4800], ["Claude", 860, 3100], ["Surge", 400, 2600], ["git", 1400, 1900], ["WeChat", 210, 1500], ["node", 640, 900], ["Xcode", 30, 610], ["Mail", 90, 420], ["Music", 4, 380]];
+const kb = v => v >= 1000 ? (v / 1000).toFixed(1) + " MB" : v + " KB";
+S.push(screen("network", "Network", "The butterfly takes the whole width. Below it, each app gets a mirrored row: bytes sent grow left in lime, bytes received grow right in sand.",
+  shell("Network", "Network", "Wi-Fi en0 · 192.168.1.24 · gateway 4 ms", `<span class="pill violet">● en0 Wi-Fi</span><span class="pill">bridge0</span><span class="pill">utun4 VPN</span><div class="seg"><span>1 min</span><span class="on">5 min</span><span>1 h</span></div>`, `
+  <div class="g717" style="align-items:end"><div><div class="lbl">Upload</div><div class="big" style="color:var(--lime);text-align:left">1.8<small>MB/s</small></div></div><div></div><div style="text-align:right"><div class="lbl">Download</div><div class="big" style="color:var(--sand)">25.6<small>MB/s</small></div></div></div>
+  <div style="height:200px">${butterfly(1000, 200, 120, "var(--lime)", "var(--sand)", .7, 1)}</div>
+  <div class="mt"><div class="row head"><span class="l">Sent</span><span></span><span class="name">App · per second</span><span></span><span>Received</span></div>
+  ${apps.map(a => `<div class="row"><span class="l num" style="color:var(--lime)">${kb(a[1])}</span>${bar(a[1] / 14, "var(--lime)", "left")}<span class="name"><b>${a[0]}</b></span>${bar(a[2] / 48, "var(--sand)", "right")}<span class="num" style="color:var(--sand)">${kb(a[2])}</span></div>`).join("")}</div>`)));
+
+const conns = [["Claude", "TCP", "api.anthropic.com", "443", "ESTABLISHED", 420, 1900], ["canary", "TCP", "github.com", "443", "ESTABLISHED", 90, 840], ["Surge", "TCP", "127.0.0.1", "6152", "LISTEN", 0, 0], ["mDNSResponder", "UDP", "224.0.0.251", "5353", "—", 2, 6], ["WeChat", "TCP", "szextshort.weixin.qq.com", "443", "ESTABLISHED", 40, 210], ["node", "TCP", "localhost", "3000", "LISTEN", 0, 0], ["Safari", "TCP", "17.253.144.10", "443", "ESTABLISHED", 12, 640], ["git", "TCP", "github.com", "22", "TIME_WAIT", 1400, 120], ["fff-mcp", "TCP", "localhost", "7811", "LISTEN", 0, 0]];
+S.push(screen("connections", "Connections", "Every socket, live. The remote host is the spine. What this Mac sends grows left. What it receives grows right.",
+  shell("Network", "Connections", "142 sockets · 38 established · 11 listening", `<div class="seg"><span class="on">All</span><span>Listening</span><span>Established</span><span>Outbound</span></div><div class="search">Filter host or port</div>`, `
+  <div class="mt"><div class="row head" style="grid-template-columns:120px 50px 1fr 260px 1fr 110px"><span>Process</span><span class="l">Sent</span><span></span><span class="name">Remote host</span><span></span><span>Received · State</span></div>
+  ${conns.map(c => `<div class="row" style="grid-template-columns:120px 50px 1fr 260px 1fr 110px"><span style="font-weight:500">${c[0]}</span><span class="l num muted" style="font-size:11px">${c[5] ? kb(c[5]) : "—"}</span>${bar(c[5] / 15, "var(--lime)", "left")}<span class="name"><span class="pill">${c[1]}</span><b class="mono" style="font-size:12px">${c[2]}</b><span class="num muted" style="font-size:11px">:${c[3]}</span></span>${bar(c[6] / 20, "var(--sand)", "right")}<span class="num" style="font-size:11px;color:${c[4] === "LISTEN" ? "var(--violet-hi)" : c[4] === "ESTABLISHED" ? "var(--lime)" : "var(--muted)"}">${c[6] ? kb(c[6]) + " · " : ""}${c[4]}</span></div>`).join("")}</div>
+  <div class="g717" style="margin-top:auto"><div class="card"><h4>Listening ports</h4><div class="num" style="font-size:13px;line-height:1.9">3000 node · 6152 Surge · 7811 fff-mcp · 5000 ControlCenter · 7000 AirPlay</div></div><div></div><div class="card r"><h4>By region</h4><div style="display:flex;gap:9px;flex-wrap:wrap"><span class="pill violet">US 24</span><span class="pill">CN 6</span><span class="pill">JP 3</span><span class="pill">local 9</span></div></div></div>`)));
+
+const cats = [["System caches", "~/Library/Caches", 1.4], ["Xcode DerivedData", "~/Library/Developer/Xcode/DerivedData", 7.2], ["iOS Simulators", "CoreSimulator/Devices", 4.1], ["Homebrew cache", "~/Library/Caches/Homebrew", 2.3], ["bun · npm · uv caches", "~/.bun, ~/.npm, ~/.cache/uv", 1.9], ["Logs", "~/Library/Logs", .81], ["Trash", "~/.Trash", .64], ["Mail attachments", "Mail Downloads", 3.0], ["Large & old files", "> 1 GB, untouched 180 days", 6.6], ["Downloads > 90 days", "~/Downloads", 2.2]];
+S.push(screen("cleanup-idle", "Cleanup · idle", "Before a scan. The split gauge shows the disk as used against free. The category list is split in two: safe caches on the left, personal files on the right.",
+  shell("Cleanup", "Cleanup", "Full Disk Access granted", `<span class="pill lime">● Full Disk Access</span>`, `
+  <div style="display:grid;grid-template-columns:auto 1fr;gap:36px;align-items:center;padding:9px 0 0">
+    ${gauge(210, 58.8)}
+    <div><div class="lbl">Macintosh HD · 588 GB used · 412 GB free</div><div style="font:800 48px/1 var(--display);letter-spacing:-.03em;margin:12px 0 18px;max-width:14ch">Find space you can safely take back.</div><div style="display:flex;gap:9px"><span class="btn pri" style="padding:10px 22px;font-size:13px">Scan</span><span class="btn ghost">Choose folders…</span></div></div>
+  </div>
+  <div class="g717" style="flex:1">
+    <div class="card"><h4><span>Safe to rebuild</span><span>7</span></h4><div class="list">${cats.slice(0, 7).map(c => `<div class="it"><i class="chk on"></i><span>${c[0]}<br><span class="mono muted" style="font-size:10.5px">${c[1]}</span></span><span class="muted">—</span></div>`).join("")}</div></div>
+    <div class="ax"><span>SAFE · REVIEW</span></div>
+    <div class="card r"><h4><span>Needs your review</span><span>3</span></h4><div class="list">${cats.slice(7).map(c => `<div class="it"><i class="chk"></i><span>${c[0]}<br><span class="mono muted" style="font-size:10.5px">${c[1]}</span></span><span class="muted">—</span></div>`).join("")}</div><p class="muted" style="font-size:12px;margin-top:12px">Unchecked by default. These are your files, not caches.</p></div>
+  </div>`, false)));
+
+S.push(screen("cleanup-scanning", "Cleanup · scanning", "The scan runs along a horizontal spine. Each category row grows two ways: file count left in violet, bytes found right in lime. Results stream in as each folder finishes.",
+  shell("Cleanup", "Scanning…", "~/Library/Caches/com.apple.Safari · 41%", `<span class="btn ghost">Cancel</span>`, `
+  <div class="g717" style="align-items:end"><div><div class="lbl">Files checked</div><div class="big">214,093</div></div><div></div><div style="text-align:right"><div class="lbl">Found so far</div><div class="big" style="color:var(--lime)">12.7<small>GB</small></div></div></div>
+  <div style="position:relative;height:9px;background:var(--ink-3);border-radius:9px 2px 9px 2px"><div style="width:41%;height:100%;background:linear-gradient(90deg,var(--violet-dim),var(--violet));border-radius:9px 2px 9px 2px"></div><div class="pulse" style="position:absolute;left:41%;top:-5px;width:2px;height:19px;background:var(--violet-hi)"></div></div>
+  <div class="mt"><div class="row head"><span class="l">Files</span><span></span><span class="name">Category</span><span></span><span>Found</span></div>
+  ${cats.map((c, i) => { const st = i < 4 ? "done" : i === 4 ? "now" : "wait"; const f = st === "wait" ? 0 : c[2] * (st === "now" ? .5 : 1);
+    return `<div class="row" style="opacity:${st === "wait" ? .35 : 1}"><span class="l num muted" style="font-size:11px">${st === "wait" ? "—" : Math.round(c[2] * 9229 + 717).toLocaleString()}</span>${bar(st === "wait" ? 0 : c[2] * 11, "var(--violet)", "left")}<span class="name">${st === "done" ? `<span style="color:var(--lime)">✓</span>` : st === "now" ? `<i class="pulse" style="width:7px;height:7px;border-radius:2px;background:var(--violet-hi);display:inline-block"></i>` : `<span class="muted">·</span>`}<b>${c[0]}</b></span>${bar(f * 13, "var(--lime)", "right")}<span class="num" style="color:${f ? "var(--lime)" : "var(--muted)"}">${f ? fmtGB(f) : "—"}</span></div>`; }).join("")}</div>`, false)));
+
+const remove = cats.slice(0, 7), keep = cats.slice(7);
+const tot = remove.reduce((a, c) => a + c[2], 0);
+S.push(screen("cleanup-review", "Cleanup · review", "Results split across the spine. The left column is what will go. The right column is what stays. Click any item to move it to the other side, and the totals rebalance.",
+  shell("Cleanup", "Review", `${fmtGB(tot + 11.8)} found in 10 categories`, `<span class="btn">Review files…</span><span class="btn lime">Move ${fmtGB(tot)} to Trash</span>`, `
+  <div class="g717" style="align-items:end"><div><div class="lbl">Will move to Trash</div><div class="big" style="color:var(--lime);font-size:56px">${tot.toFixed(1)}<small>GB</small></div></div><div></div><div style="text-align:right"><div class="lbl">Will keep</div><div class="big muted" style="font-size:56px">11.8<small>GB</small></div></div></div>
+  <div class="g717" style="flex:1;min-height:0">
+    <div class="card" style="border-color:var(--lime-dim)">${remove.map((c, i) => `<div class="it" style="display:grid;grid-template-columns:18px 1fr 110px 70px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--hair);font-size:13px"><i class="chk on"></i><span>${c[0]}${i === 0 ? `<br><span class="mono muted" style="font-size:10.5px">${c[1]} · 1,204 items</span>` : ""}</span><div class="bar right" style="height:6px;display:flex;justify-content:flex-end"><i style="display:block;width:${c[2] / 7.2 * 100}%;background:var(--lime);border-radius:3px 0 0 3px"></i></div><span class="num" style="text-align:right">${fmtGB(c[2])}</span></div>`).join("")}</div>
+    <div class="ax"><span>REMOVE ◂ ▸ KEEP</span></div>
+    <div class="card r">${keep.map(c => `<div style="display:grid;grid-template-columns:70px 110px 1fr 18px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--hair);font-size:13px"><span class="num muted">${fmtGB(c[2])}</span><div style="height:6px"><i style="display:block;height:100%;width:${c[2] / 7.2 * 100}%;background:var(--muted);opacity:.5;border-radius:0 3px 3px 0"></i></div><span style="text-align:right">${c[0]}</span><i class="chk"></i></div>`).join("")}<p class="muted" style="font-size:12px;margin-top:14px;text-align:right">Personal files never move without a check.</p></div>
+  </div>
+  <div class="muted" style="font-size:12px;text-align:center">Items go to the Trash. Nothing is deleted until you empty it.</div>`, false)));
+
+S.push(screen("cleanup-done", "Cleanup · done", "The result as one before-and-after bar. The reclaimed slice glows lime where the two halves meet.",
+  shell("Cleanup", "Done", "Moved 7 categories to the Trash", ``, `
+  <div style="flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:27px;text-align:center">
+    <div class="lbl">Took back</div>
+    <div style="font:800 140px/.85 var(--display);letter-spacing:-.05em;color:var(--lime)">18.4<span style="font-size:40px;color:var(--muted);letter-spacing:0"> GB</span></div>
+    <div style="width:760px">
+      <div style="display:grid;grid-template-columns:7fr 1fr 7fr;font:500 11px var(--mono);color:var(--muted);margin-bottom:8px"><span style="text-align:left">Before · 412 GB free</span><span></span><span style="text-align:right">After · 430.4 GB free</span></div>
+      <div style="display:flex;height:18px;border-radius:9px 2px 9px 2px;overflow:hidden;background:var(--ink-3)"><i style="width:56.9%;background:var(--violet)"></i><i style="width:1.8%;background:var(--lime);box-shadow:0 0 24px var(--lime)"></i><i style="flex:1;background:var(--lime-dim)"></i></div>
+    </div>
+    <div style="display:flex;gap:9px"><span class="btn">Open Trash</span><span class="btn danger">Empty Trash…</span><span class="btn pri">Done</span></div>
+    <div class="muted" style="font-size:12px">Next suggested scan in 14 days. Caches rebuild on their own.</div>
+  </div>`, false)));
+
+/* mirrored icicle for disk */
+function icicle() {
+  const W = 1000, H = 330, cx = W / 2, lw = 120;
+  const L = [["Library", 214, [["Developer", 96, [["Xcode", 52], ["CoreSimulator", 38], ["other", 6]]], ["Caches", 41, [["Homebrew", 14], ["Safari", 11], ["other", 16]]], ["Containers", 52, [["WeChat", 30], ["other", 22]]], ["other", 25, []]]]];
+  const R = [["devv", 168, [["nanokeep", 22, [["zig-cache", 14], ["other", 8]]], ["pulse", 61, [["node_modules", 41], ["other", 20]]], ["other", 85, []]]], ["Movies", 92, [["Final Cut", 70, []], ["other", 22, []]]]];
+  const scale = H / 330; let s = `<svg width="100%" viewBox="0 0 ${W} ${H + 20}">`;
+  const cols = ["var(--violet)", "#7A3FB0", "#5E3A7E"], colsR = ["var(--sand)", "#B9926A", "#8C7259"];
+  function draw(nodes, depth, y0, dir) {
+    let y = y0;
+    for (const n of nodes) {
+      const h = n[1] * scale, x = dir < 0 ? cx - 6 - (depth + 1) * lw : cx + 6 + depth * lw;
+      s += `<rect x="${x + 1}" y="${y + 1}" width="${lw - 2}" height="${Math.max(1, h - 2)}" rx="${depth ? 2 : 4}" fill="${(dir < 0 ? cols : colsR)[depth]}" opacity="${n[0] === "other" ? .35 : .9}"/>`;
+      if (h > 18) s += `<text x="${x + (dir < 0 ? lw - 8 : 8)}" y="${y + 15}" font-size="11" fill="${depth ? "var(--text)" : "#120A18"}" text-anchor="${dir < 0 ? "end" : "start"}">${n[0]}</text>`;
+      if (h > 32) s += `<text x="${x + (dir < 0 ? lw - 8 : 8)}" y="${y + 29}" font-size="10" fill="${depth ? "var(--muted)" : "#120A18"}" opacity=".8" text-anchor="${dir < 0 ? "end" : "start"}">${n[1]} GB</text>`;
+      if (n[2]) draw(n[2], depth + 1, y, dir);
+      y += h;
+    }
+  }
+  draw(L, 0, 0, -1); draw(R, 0, 0, 1);
+  s += `<line x1="${cx}" x2="${cx}" y1="0" y2="${H + 20}" stroke="var(--violet)"/><text x="${cx}" y="${H + 16}" text-anchor="middle" font-size="10" fill="var(--muted)">~ 588 GB</text>`;
+  return s + "</svg>";
+}
+S.push(screen("disk", "Disk map", "A mirrored icicle of the home folder. System-owned folders grow left in violet. Your own work grows right in sand. Depth runs outward from the spine.",
+  shell("Disk", "Disk", "Macintosh HD · 588 of 1000 GB used", `<span class="pill">read 786 KB/s</span><span class="pill">write 120 KB/s</span><span class="btn">Choose folder…</span>`, `
+  <div class="mono muted" style="font-size:12px">~ / <span style="color:var(--text)">martinfan</span></div>
+  <div class="card" style="border-radius:var(--r-c)">${icicle()}</div>
+  <div class="g717"><div class="card"><h4>Largest on the left</h4>${[["Xcode", "52 GB"], ["CoreSimulator", "38 GB"], ["WeChat", "30 GB"]].map(r => `<div class="it" style="display:flex;justify-content:space-between;padding:5px 0;font-size:13px"><span>${r[0]}</span><span class="num">${r[1]}</span></div>`).join("")}</div><div></div><div class="card r"><h4>Largest on the right</h4>${[["Final Cut", "70 GB"], ["node_modules", "41 GB"], ["zig-cache", "14 GB"]].map(r => `<div class="it" style="display:flex;justify-content:space-between;padding:5px 0;font-size:13px"><span>${r[0]}</span><span class="num">${r[1]}</span></div>`).join("")}</div></div>`)));
+
+S.push(screen("menubar", "Menu bar popover", "nanokeep in the menu bar. The same spine, folded into 340 px: CPU against memory, upload against download, and one cleanup action.",
+  `<div class="frame"><div class="stage"><div class="menubar"><span>⌁</span><span class="me">33% · 21.6G</span><span>Wi-Fi</span><span>Tue 21 Oct 14:20</span></div>
+  <div style="display:flex;justify-content:flex-end;padding:8px 120px 0"><div class="pop">
+    <div class="g717" style="align-items:end"><div><div class="lbl">CPU</div><div class="big" style="font-size:34px;color:var(--violet-hi)">33<small>%</small></div></div><div class="ax" style="height:100%"></div><div style="text-align:right"><div class="lbl">Memory</div><div class="big" style="font-size:34px;color:var(--sand)">21.6<small>GB</small></div></div></div>
+    <div style="height:70px">${butterfly(300, 70, 40, "var(--lime)", "var(--sand)", .8, .9, false)}</div>
+    <div style="display:flex;justify-content:space-between;font:500 11px var(--mono)"><span style="color:var(--lime)">↑ 1.8 MB/s</span><span style="color:var(--sand)">↓ 25.6 MB/s</span></div>
+    <div class="mt">${procs.slice(0, 4).map(p => `<div class="row" style="grid-template-columns:34px 1fr 110px 1fr 54px;height:28px;font-size:12px"><span class="l num muted">${p[2].toFixed(1)}</span>${bar(p[2] * 22 + 2, "var(--violet)", "left")}<span class="name"><b>${p[0].replace("com.apple.WebKit.", "")}</b></span>${bar(p[3] / 10.9 * 100, "var(--sand)", "right")}<span class="num">${fmtGB(p[3])}</span></div>`).join("")}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;background:var(--ink-3);border-radius:9px 2px 9px 2px;padding:10px 12px"><span><b style="color:var(--lime)">18.4 GB</b> <span class="muted" style="font-size:12px">reclaimable</span></span><span class="btn pri">Clean…</span></div>
+    <div style="display:flex;justify-content:space-between" class="muted"><span style="font-size:12px">Open nanokeep</span><span class="mono" style="font-size:11px">⌘ ,</span></div>
+  </div></div></div></div>`));
+
+S.push(screen("cpu-memory", "CPU and memory", "The hardware pair. Performance cores sit left of the spine and efficiency cores right. Below, memory splits into used and available across the same axis.",
+  shell("CPU", "CPU · Memory", "Apple M4 Pro · 10 performance + 4 efficiency cores · 24 GB", `<span class="pill lime">● Thermal nominal</span><span class="pill">load 3.2 · 2.9 · 2.7</span>`, `
+  <div class="g717" style="height:230px">
+    <div class="card" style="display:flex;gap:6px;align-items:flex-end;justify-content:flex-end"><h4 style="position:absolute">P-cores</h4>${Array.from({ length: 10 }, () => { const v = rnd() * .8 + .1; return `<div style="flex:1;height:100%;background:var(--ink-3);border-radius:4px 1px 4px 1px;display:flex;align-items:flex-end"><i style="display:block;width:100%;height:${v * 100}%;background:var(--violet);border-radius:4px 1px 4px 1px;opacity:${.5 + v / 2}"></i></div>`; }).join("")}</div>
+    <div class="ax"><span>P · E CORES</span></div>
+    <div class="card r" style="display:flex;gap:6px;align-items:flex-end"><h4 style="position:absolute">E-cores</h4>${Array.from({ length: 4 }, () => { const v = rnd() * .5 + .3; return `<div style="flex:1;height:100%;background:var(--ink-3);border-radius:1px 4px 1px 4px;display:flex;align-items:flex-end"><i style="display:block;width:100%;height:${v * 100}%;background:var(--violet-hi);border-radius:1px 4px 1px 4px;opacity:.7"></i></div>`; }).join("")}</div>
+  </div>
+  <div class="card" style="border-radius:var(--r-c)"><h4><span>User ↑ · System ↓</span><span>5 min</span></h4>${butterfly(1000, 110, 100, "var(--violet)", "var(--sand)", .8, .5)}</div>
+  <div class="card" style="border-radius:var(--r-c)"><h4><span>Memory · 21.6 GB used</span><span>2.4 GB available</span></h4>
+    <div style="display:flex;height:28px;gap:2px"><i style="flex:11.2;background:var(--violet);border-radius:9px 0 0 9px"></i><i style="flex:4.8;background:#7A3FB0"></i><i style="flex:5.6;background:#5E3A7E"></i><i style="width:2px;background:var(--text)"></i><i style="flex:1.6;background:var(--sand)"></i><i style="flex:.8;background:var(--lime);border-radius:0 9px 9px 0"></i></div>
+    <div style="display:flex;justify-content:space-between;margin-top:10px;font:400 11px var(--mono);color:var(--muted)"><span>App 11.2 · Wired 4.8 · Compressed 5.6</span><span>Cached 1.6 · Free 0.8 · Swap 3.1 GB</span></div></div>`)));
+
+$("#screens").innerHTML = S.join("");
+</script>
+</body>
+</html>

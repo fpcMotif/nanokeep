@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planisphere</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,500;1,6..96,500&family=Space+Mono&family=Work+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sky: #05110f;
+  --sky-raised: #0a1e1b;
+  --sky-deep: #020807;
+  --constellation: #13d2c1;
+  --aurora: #55d48b;
+  --moonlight: #cde4df;
+  --dust: #5e7a74;
+  --nova: #ff7a59;
+  --hairline: #1c3833;
+  --u: 3px;
+  --display: "Bodoni Moda", serif;
+  --body: "Work Sans", sans-serif;
+  --mono: "Space Mono", monospace;
+}
+* { box-sizing: border-box; margin: 0; }
+body {
+  background-color: var(--sky);
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgb(205 228 223 / .2), transparent),
+    radial-gradient(1px 1px at 72% 9%, rgb(205 228 223 / .15), transparent),
+    radial-gradient(1px 1px at 41% 63%, rgb(205 228 223 / .1), transparent),
+    radial-gradient(1px 1px at 88% 77%, rgb(205 228 223 / .18), transparent),
+    radial-gradient(1px 1px at 23% 91%, rgb(205 228 223 / .12), transparent);
+  background-size: 240px 240px;
+  color: var(--moonlight);
+  font: 400 15px/1.6 var(--body);
+  padding: calc(var(--u) * 21) calc(var(--u) * 13);
+}
+main { max-width: 1080px; margin: 0 auto; display: grid; gap: calc(var(--u) * 21); }
+h1 {
+  font: italic 500 clamp(42px, 8vw, 84px)/1 var(--display);
+  letter-spacing: -.02em;
+  transform: rotate(-2deg);
+  transform-origin: left;
+}
+h2 { font: 500 30px/1.1 var(--display); margin-bottom: calc(var(--u) * 8); }
+.label {
+  font: 600 11px/1 var(--body);
+  letter-spacing: .24em;
+  text-transform: uppercase;
+  color: var(--dust);
+}
+.lede { color: var(--dust); max-width: 60ch; margin-top: calc(var(--u) * 8); }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.card {
+  background: var(--sky-raised);
+  border: 1px solid var(--hairline);
+  border-radius: 39px;
+  padding: calc(var(--u) * 8);
+}
+.grid { display: grid; gap: calc(var(--u) * 5); grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.swatch { display: grid; gap: calc(var(--u) * 3); }
+.chip { height: 63px; border-radius: 9999px; border: 1px solid var(--hairline); }
+.rolls { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: calc(var(--u) * 3) calc(var(--u) * 8); }
+.rolls div { display: flex; justify-content: space-between; border-bottom: 1px solid var(--hairline); padding: calc(var(--u) * 3) 0; gap: 12px; }
+.rolls dd { font-family: var(--mono); color: var(--constellation); text-align: right; }
+
+.meter { display: flex; flex-direction: column-reverse; gap: var(--u); width: 63px; }
+.meter i { height: 6px; border-radius: 9999px; background: var(--hairline); }
+.meter i.on { background: var(--c, var(--constellation)); box-shadow: 0 0 9px var(--c, var(--constellation)); }
+.metric { display: flex; align-items: end; justify-content: space-between; gap: calc(var(--u) * 5); }
+.metric .big { font: 400 39px/1 var(--mono); }
+.metric .unit { color: var(--dust); font-size: 15px; }
+
+.ring { width: 39px; height: 39px; border-radius: 50%; border: 1px solid var(--hairline); position: relative; }
+.ring::after {
+  content: ""; position: absolute; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--c, var(--dust)); top: 50%; left: 50%;
+  transform: rotate(var(--a)) translateY(-19px) translate(-50%, -50%);
+  transform-origin: 0 0;
+}
+.ring.active { border-color: var(--constellation); box-shadow: 0 0 15px rgb(19 210 193 / .35); }
+.rail { display: flex; flex-wrap: wrap; gap: calc(var(--u) * 8); }
+.rail figure { display: grid; justify-items: center; gap: calc(var(--u) * 3); }
+
+.pill {
+  display: inline-flex; align-items: center; height: 39px; padding: 0 calc(var(--u) * 8);
+  border-radius: 9999px; border: 1px solid var(--hairline); background: transparent;
+  color: var(--moonlight); font: 600 13px var(--body); cursor: pointer;
+}
+.pill.primary { background: var(--constellation); color: var(--sky); border-color: transparent; }
+.pill.danger { background: var(--nova); color: var(--sky); border-color: transparent; }
+.pill:focus-visible { outline: 2px solid var(--constellation); outline-offset: 3px; }
+.seg { display: inline-flex; padding: var(--u); border-radius: 9999px; background: var(--sky-deep); border: 1px solid var(--hairline); }
+.seg button { border: 0; background: none; color: var(--dust); font: 600 13px var(--body); height: 33px; padding: 0 calc(var(--u) * 6); border-radius: 9999px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--sky-raised); color: var(--moonlight); box-shadow: inset 0 0 0 1px var(--constellation); }
+.row { display: flex; flex-wrap: wrap; gap: calc(var(--u) * 5); align-items: center; }
+.search { height: 39px; border-radius: 9999px; border: 1px solid var(--hairline); background: var(--sky-deep); color: var(--moonlight); padding: 0 calc(var(--u) * 6); font: 15px var(--body); width: 240px; max-width: 100%; }
+
+table { width: 100%; border-collapse: separate; border-spacing: 0 var(--u); }
+th { text-align: left; padding: 0 calc(var(--u) * 5) calc(var(--u) * 3); }
+td { height: 45px; padding: 0 calc(var(--u) * 5); }
+td.n, th.n { text-align: right; }
+tr.sel td { background: rgb(19 210 193 / .12); }
+tr.sel td:first-child { border-radius: 9999px 0 0 9999px; }
+tr.sel td:last-child { border-radius: 0 9999px 9999px 0; }
+.star { display: inline-block; border-radius: 50%; background: var(--moonlight); margin-right: 12px; vertical-align: middle; }
+.child td:first-child { padding-left: 39px; position: relative; }
+.child td:first-child::before { content: ""; position: absolute; left: 21px; top: -24px; bottom: 50%; width: 12px; border-left: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); }
+.hot { color: var(--nova); }
+.table-wrap { overflow-x: auto; }
+.screens { display: grid; gap: calc(var(--u) * 8); }
+.screens img { width: 100%; border-radius: 39px; border: 1px solid var(--hairline); display: block; }
+.screens figcaption { margin-top: calc(var(--u) * 3); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="label">nanokeep · design system 02</p>
+    <h1>Planisphere</h1>
+    <p class="lede">A process monitor drawn as a planetarium star chart. Each process is a star. Each process group is a constellation. Every decision below came from one roll of the dice.</p>
+  </header>
+
+  <section>
+    <h2>The rolls</h2>
+    <dl class="rolls">
+      <div><dt>Metaphor</dt><dd>star chart</dd></div>
+      <div><dt>Mode</dt><dd>dark</dd></div>
+      <div><dt>Headline</dt><dd>Bodoni Moda</dd></div>
+      <div><dt>Body</dt><dd>Work Sans</dd></div>
+      <div><dt>Numbers</dt><dd>Space Mono</dd></div>
+      <div><dt>Roundness</dt><dd>full pill</dd></div>
+      <div><dt>Seed</dt><dd>#13d2c1</dd></div>
+      <div><dt>Accent 2</dt><dd>#55d48b</dd></div>
+      <div><dt>Accent 3</dt><dd>#cde4df</dd></div>
+      <div><dt>Load visual</dt><dd>stacked stripes</dd></div>
+      <div><dt>Navigation</dt><dd>left rail</dd></div>
+      <div><dt>Density</dt><dd>airy</dd></div>
+      <div><dt>Tilt</dt><dd>−2°</dd></div>
+      <div><dt>Base unit</dt><dd>3px</dd></div>
+    </dl>
+  </section>
+
+  <section>
+    <h2>Color</h2>
+    <div class="grid">
+      <div class="swatch"><div class="chip" style="background:var(--sky)"></div><span class="label">Sky</span><span class="num">#05110F</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--sky-raised)"></div><span class="label">Sky raised</span><span class="num">#0A1E1B</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--constellation)"></div><span class="label">Constellation</span><span class="num">#13D2C1</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--aurora)"></div><span class="label">Aurora</span><span class="num">#55D48B</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--moonlight)"></div><span class="label">Moonlight</span><span class="num">#CDE4DF</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--dust)"></div><span class="label">Dust</span><span class="num">#5E7A74</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--nova)"></div><span class="label">Nova</span><span class="num">#FF7A59</span></div>
+      <div class="swatch"><div class="chip" style="background:var(--hairline)"></div><span class="label">Hairline</span><span class="num">#1C3833</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Type</h2>
+    <div class="card" style="display:grid;gap:24px">
+      <p style="font:italic 500 54px/1 var(--display);transform:rotate(-2deg);transform-origin:left">Processes</p>
+      <p style="font:500 30px/1.1 var(--display)">Brightest stars tonight</p>
+      <p>Work Sans carries every sentence. It stays quiet so the numbers can speak.</p>
+      <p class="label">Section label · 11px · 0.24em</p>
+      <p class="num" style="font-size:24px">33.3% · 21.6 GB · 2:06:06 · PID 18362</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Stripe meter</h2>
+    <div class="grid">
+      <div class="card metric" style="--c:var(--constellation)">
+        <div><p class="label">CPU</p><p class="big">33<span class="unit">%</span></p></div>
+        <div class="meter"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      </div>
+      <div class="card metric" style="--c:var(--aurora)">
+        <div><p class="label">Memory</p><p class="big">21.6<span class="unit">GB</span></p></div>
+        <div class="meter"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div>
+      </div>
+      <div class="card metric" style="--c:var(--nova)">
+        <div><p class="label">Thermal</p><p class="big">91<span class="unit">°C</span></p></div>
+        <div class="meter"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Orbit rail</h2>
+    <div class="card rail">
+      <figure><div class="ring active" style="--a:120deg;--c:var(--constellation)"></div><figcaption class="label">Overview</figcaption></figure>
+      <figure><div class="ring" style="--a:119deg;--c:var(--constellation)"></div><figcaption class="label">CPU</figcaption></figure>
+      <figure><div class="ring" style="--a:302deg;--c:var(--aurora)"></div><figcaption class="label">Memory</figcaption></figure>
+      <figure><div class="ring" style="--a:0deg"></div><figcaption class="label">GPU</figcaption></figure>
+      <figure><div class="ring" style="--a:40deg"></div><figcaption class="label">Disk</figcaption></figure>
+      <figure><div class="ring" style="--a:18deg"></div><figcaption class="label">Network</figcaption></figure>
+      <figure><div class="ring" style="--a:200deg;--c:var(--nova)"></div><figcaption class="label">Energy</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>Controls</h2>
+    <div class="card" style="display:grid;gap:24px">
+      <div class="row">
+        <input class="search" placeholder="Search the sky" aria-label="Search processes">
+        <div class="seg" role="group" aria-label="Filter">
+          <button aria-pressed="false">All</button><button aria-pressed="false">Apps</button><button aria-pressed="true">Mine</button><button aria-pressed="false">System</button>
+        </div>
+      </div>
+      <div class="row">
+        <button class="pill primary">Open Settings</button>
+        <button class="pill">Quit</button>
+        <button class="pill danger">Force Quit</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Constellation table</h2>
+    <div class="card table-wrap">
+      <table>
+        <thead><tr><th class="label">Name</th><th class="label n">% CPU</th><th class="label n">Memory</th><th class="label n">Threads</th><th class="label n">PID</th></tr></thead>
+        <tbody>
+          <tr class="sel"><td><span class="star" style="width:9px;height:9px;background:var(--constellation)"></span>canary <span class="label">64</span></td><td class="n num">3.7</td><td class="n num hot">10.9 GB</td><td class="n num">1449</td><td class="n num">18362</td></tr>
+          <tr class="child"><td><span class="star" style="width:5px;height:5px"></span>canary Helper (GPU)</td><td class="n num">1.9</td><td class="n num hot">2.4 GB</td><td class="n num">41</td><td class="n num">18370</td></tr>
+          <tr class="child"><td><span class="star" style="width:4px;height:4px"></span>canary Helper (Renderer)</td><td class="n num">0.8</td><td class="n num">812 MB</td><td class="n num">22</td><td class="n num">18391</td></tr>
+          <tr><td><span class="star" style="width:7px;height:7px"></span>com.apple.WebKit.WebContent <span class="label">6</span></td><td class="n num">0.0</td><td class="n num hot">5.3 GB</td><td class="n num">58</td><td class="n num">3661</td></tr>
+          <tr><td><span class="star" style="width:6px;height:6px"></span>Claude <span class="label">28</span></td><td class="n num">0.3</td><td class="n num hot">3.3 GB</td><td class="n num">392</td><td class="n num">5755</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Screens</h2>
+    <p class="lede" style="margin:0 0 24px"><a href="observatory.html" style="color:var(--constellation)">Open the live Observatory prototype →</a></p>
+    <div class="screens" id="screens">
+      <figure><img src="stitch/overview.png" alt="Overview screen"><figcaption class="label">Overview · Stitch</figcaption></figure>
+      <figure><img src="stitch/processes-b.png" alt="Processes screen with constellation groups"><figcaption class="label">Processes · Stitch</figcaption></figure>
+      <figure><img src="stitch/processes-a.png" alt="Processes screen, alternate"><figcaption class="label">Processes, alternate · Stitch</figcaption></figure>
+      <figure><img src="stitch/cpu.png" alt="CPU screen"><figcaption class="label">CPU · Stitch</figcaption></figure>
+      <figure><img src="stitch/cleanup-a.png" alt="Cleanup screen"><figcaption class="label">Cleanup · Stitch</figcaption></figure>
+      <figure><img src="stitch/cleanup-b.png" alt="Cleanup screen, alternate"><figcaption class="label">Cleanup, alternate · Stitch</figcaption></figure>
+    </div>
+  </section>
+</main>
+</body>
+</html>

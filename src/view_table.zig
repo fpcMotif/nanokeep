@@ -1,4 +1,3 @@
-const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 

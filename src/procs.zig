@@ -23,6 +23,14 @@ const PROC_PIDTBSDSHORTINFO = 13;
 const RUSAGE_INFO_V6 = 6;
 const PROCESSOR_CPU_LOAD_INFO = 2;
 const HOST_VM_INFO64 = 4;
+const CPU_STATE_USER = 0;
+const CPU_STATE_SYSTEM = 1;
+const CPU_STATE_IDLE = 2;
+const CPU_STATE_NICE = 3;
+const CPU_STATE_MAX = 4;
+const MAXPATHLEN = 1024;
+const max_pids = 16384;
+const percent = 100;
 
 const ShortInfo = extern struct { pid: u32, ppid: u32, pgid: u32, status: u32, comm: [16]u8, flags: u32, uid: u32, gid: u32, ruid: u32, rgid: u32, svuid: u32, svgid: u32, rfu: u32 };
 
@@ -165,23 +173,38 @@ pub const System = struct {
     threads: u64 = 0,
 };
 
-pub const Signal = enum(c_int) { quit = 15, force = 9 };
+pub const Signal = enum(c_int) { quit = @intFromEnum(std.c.SIG.TERM), force = @intFromEnum(std.c.SIG.KILL) };
 
 pub const QuitError = error{ NotYours, Itself, Failed };
 
 const Prev = struct { time_ns: u64, disk: u64, energy: u64 };
 
+const Known = struct {
+    start: u64,
+    uuid: [16]u8,
+    ppid: u32,
+    uid: u32,
+    comm: [16]u8,
+    path: []u8,
+    name: []const u8,
+    bundle: []const u8,
+    user: []const u8,
+    prev: ?Prev = null,
+    seen: usize,
+};
+
 pub const Sampler = struct {
     gpa: std.mem.Allocator,
-    arena: std.heap.ArenaAllocator,
     procs: std.ArrayList(Proc) = .empty,
     system: System = .{},
-    prev: std.AutoHashMapUnmanaged(i32, Prev) = .empty,
     users: std.AutoHashMapUnmanaged(u32, []u8) = .empty,
+    cache: std.AutoHashMapUnmanaged(i32, Known) = .empty,
+    gone: std.ArrayList(i32) = .empty,
     prev_wall: f64 = 0,
     prev_busy: u64 = 0,
     prev_all: u64 = 0,
     samples: usize = 0,
+    lookups: usize = 0,
     num: u64 = 0,
     den: u64 = 1,
     pids: []c_int = &.{},
@@ -195,16 +218,18 @@ pub const Sampler = struct {
         var total: u64 = 0;
         var len: usize = @sizeOf(u64);
         _ = sysctlbyname("hw.memsize", &total, &len, null, 0);
-        return .{ .gpa = gpa, .arena = .init(gpa), .num = tb[0], .den = @max(1, tb[1]), .uid = getuid(), .self_pid = getpid(), .home = home, .system = .{ .mem_total = total } };
+        return .{ .gpa = gpa, .num = tb[0], .den = @max(1, tb[1]), .uid = getuid(), .self_pid = getpid(), .home = home, .system = .{ .mem_total = total } };
     }
 
     pub fn deinit(s: *Sampler) void {
         s.procs.deinit(s.gpa);
-        s.prev.deinit(s.gpa);
+        var known = s.cache.valueIterator();
+        while (known.next()) |k| s.gpa.free(k.path);
+        s.cache.deinit(s.gpa);
+        s.gone.deinit(s.gpa);
         var it = s.users.valueIterator();
         while (it.next()) |u| s.gpa.free(u.*);
         s.users.deinit(s.gpa);
-        s.arena.deinit();
         if (s.pids.len > 0) s.gpa.free(s.pids);
     }
 
@@ -220,53 +245,83 @@ pub const Sampler = struct {
     }
 
     pub fn sample(s: *Sampler, now: f64) void {
-        if (s.pids.len == 0) s.pids = s.gpa.alloc(c_int, 16384) catch return;
+        if (s.pids.len == 0) s.pids = s.gpa.alloc(c_int, max_pids) catch return;
         const got = proc_listallpids(s.pids.ptr, @intCast(s.pids.len * @sizeOf(c_int)));
         const n: usize = @min(s.pids.len, @as(usize, @intCast(@max(0, got))));
-        _ = s.arena.reset(.retain_capacity);
-        const ar = s.arena.allocator();
         s.procs.clearRetainingCapacity();
         s.procs.ensureTotalCapacity(s.gpa, n) catch return;
-        var next: std.AutoHashMapUnmanaged(i32, Prev) = .empty;
-        next.ensureTotalCapacity(s.gpa, @intCast(n)) catch return;
+        s.cache.ensureUnusedCapacity(s.gpa, @intCast(n)) catch return;
+        s.gone.ensureTotalCapacity(s.gpa, s.cache.count()) catch return;
         const wall = now - s.prev_wall;
+        const gen = s.samples + 1;
         s.system.power = 0;
         s.system.threads = 0;
-        var info: ShortInfo = undefined;
         var ru: Rusage = undefined;
         var ti: TaskInfo = undefined;
         for (s.pids[0..n]) |pid| {
             if (pid <= 0) continue;
-            if (proc_pidinfo(pid, PROC_PIDTBSDSHORTINFO, 0, &info, @sizeOf(ShortInfo)) != @sizeOf(ShortInfo)) continue;
-            var p: Proc = .{ .pid = pid, .uid = info.uid, .user = s.userName(info.uid) };
-            var path: [1024]u8 = undefined;
-            const plen = proc_pidpath(pid, &path, path.len);
-            const full = if (plen > 0) path[0..@intCast(plen)] else std.mem.sliceTo(&info.comm, 0);
-            p.name = ar.dupe(u8, displayName(full)) catch "?";
-            p.bundle = ar.dupe(u8, outerBundle(full)) catch "";
-            if (proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) == 0) {
+            const readable = proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) == 0;
+            const k = s.lookUp(pid, if (readable) ru.proc_start_abstime else 0, if (readable) ru.uuid else @splat(0)) orelse continue;
+            k.seen = gen;
+            var p: Proc = .{ .pid = pid, .uid = k.uid, .name = k.name, .bundle = k.bundle, .user = k.user };
+            if (readable) {
                 const t = (ru.user_time + ru.system_time) * s.num / s.den;
                 const disk = ru.diskio_bytesread + ru.diskio_byteswritten;
                 p.memory = ru.phys_footprint;
                 p.cpu_time_ns = t;
                 p.known = true;
                 if (proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti, @sizeOf(TaskInfo)) == @sizeOf(TaskInfo)) p.threads = @intCast(@max(0, ti.threadnum));
-                next.putAssumeCapacity(pid, .{ .time_ns = t, .disk = disk, .energy = ru.energy_nj });
-                if (s.samples > 0 and wall > 0) if (s.prev.get(pid)) |before| {
-                    p.cpu = @floatCast(@as(f64, @floatFromInt(t -| before.time_ns)) / (wall * 1e9) * 100);
+                if (s.samples > 0 and wall > 0) if (k.prev) |before| {
+                    const wall_ns = wall * std.time.ns_per_s;
+                    p.cpu = @floatCast(@as(f64, @floatFromInt(t -| before.time_ns)) / wall_ns * percent);
                     p.disk_rate = @floatCast(@as(f64, @floatFromInt(disk -| before.disk)) / wall);
-                    p.energy = @floatCast(@as(f64, @floatFromInt(ru.energy_nj -| before.energy)) / (wall * 1e9));
+                    p.energy = @floatCast(@as(f64, @floatFromInt(ru.energy_nj -| before.energy)) / wall_ns);
                     s.system.power += p.energy;
                 };
+                k.prev = .{ .time_ns = t, .disk = disk, .energy = ru.energy_nj };
             }
             s.system.threads += p.threads;
             s.procs.appendAssumeCapacity(p);
         }
-        s.prev.deinit(s.gpa);
-        s.prev = next;
+        s.forget(gen);
         s.prev_wall = now;
         s.readSystem();
         s.samples += 1;
+    }
+
+    fn lookUp(s: *Sampler, pid: i32, start: u64, uuid: [16]u8) ?*Known {
+        var info: ShortInfo = undefined;
+        const cached = s.cache.getPtr(pid);
+        if (cached) |k| if (start != 0 and k.start == start and std.mem.eql(u8, &k.uuid, &uuid)) return k;
+        if (proc_pidinfo(pid, PROC_PIDTBSDSHORTINFO, 0, &info, @sizeOf(ShortInfo)) != @sizeOf(ShortInfo)) return null;
+        if (cached) |k| if (start == 0 and k.start == 0 and k.uid == info.uid and k.ppid == info.ppid and std.mem.eql(u8, &k.comm, &info.comm)) return k;
+        var path: [MAXPATHLEN]u8 = undefined;
+        const plen = proc_pidpath(pid, &path, path.len);
+        s.lookups += 1;
+        const full = if (plen > 0) path[0..@intCast(plen)] else std.mem.sliceTo(&info.comm, 0);
+        const owned = s.gpa.dupe(u8, full) catch return null;
+        if (cached) |k| s.gpa.free(k.path);
+        const k = s.cache.getOrPutAssumeCapacity(pid).value_ptr;
+        k.* = .{
+            .start = start,
+            .uuid = uuid,
+            .ppid = info.ppid,
+            .uid = info.uid,
+            .comm = info.comm,
+            .path = owned,
+            .name = displayName(owned),
+            .bundle = outerBundle(owned),
+            .user = s.userName(info.uid),
+            .seen = 0,
+        };
+        return k;
+    }
+
+    fn forget(s: *Sampler, gen: usize) void {
+        s.gone.clearRetainingCapacity();
+        var it = s.cache.iterator();
+        while (it.next()) |e| if (e.value_ptr.seen != gen) s.gone.appendAssumeCapacity(e.key_ptr.*);
+        for (s.gone.items) |pid| if (s.cache.fetchRemove(pid)) |e| s.gpa.free(e.value.path);
     }
 
     fn readSystem(s: *Sampler) void {
@@ -278,13 +333,13 @@ pub const Sampler = struct {
             var busy: u64 = 0;
             var all: u64 = 0;
             for (0..cpus) |i| {
-                const c = data[i * 4 ..][0..4];
-                const user = @as(u64, @as(u32, @bitCast(c[0]))) + @as(u32, @bitCast(c[3]));
-                const sys = @as(u64, @as(u32, @bitCast(c[1])));
+                const c = data[i * CPU_STATE_MAX ..][0..CPU_STATE_MAX];
+                const user = @as(u64, @as(u32, @bitCast(c[CPU_STATE_USER]))) + @as(u32, @bitCast(c[CPU_STATE_NICE]));
+                const sys = @as(u64, @as(u32, @bitCast(c[CPU_STATE_SYSTEM])));
                 busy += user + sys;
-                all += user + sys + @as(u32, @bitCast(c[2]));
+                all += user + sys + @as(u32, @bitCast(c[CPU_STATE_IDLE]));
             }
-            if (s.samples > 0 and all > s.prev_all) s.system.cpu = @floatCast(@as(f64, @floatFromInt(busy -| s.prev_busy)) / @as(f64, @floatFromInt(all - s.prev_all)) * 100);
+            if (s.samples > 0 and all > s.prev_all) s.system.cpu = @floatCast(@as(f64, @floatFromInt(busy -| s.prev_busy)) / @as(f64, @floatFromInt(all - s.prev_all)) * percent);
             s.prev_busy = busy;
             s.prev_all = all;
         };
@@ -348,26 +403,33 @@ pub fn bytes(buf: []u8, n: u64) []const u8 {
 }
 
 pub fn duration(buf: []u8, ns: u64) []const u8 {
-    const total_cs = ns / 10_000_000;
-    const cs = total_cs % 100;
-    const secs = total_cs / 100;
-    const h = secs / 3600;
-    const m = (secs / 60) % 60;
-    const sec = secs % 60;
+    const cs_per_s = 100;
+    const total_cs = ns / (std.time.ns_per_s / cs_per_s);
+    const cs = total_cs % cs_per_s;
+    const secs = total_cs / cs_per_s;
+    const h = secs / std.time.s_per_hour;
+    const m = (secs % std.time.s_per_hour) / std.time.s_per_min;
+    const sec = secs % std.time.s_per_min;
     if (h > 0) return std.fmt.bufPrint(buf, "{d}:{d:0>2}:{d:0>2}", .{ h, m, sec }) catch "?";
     return std.fmt.bufPrint(buf, "{d}:{d:0>2}.{d:0>2}", .{ m, sec, cs }) catch "?";
 }
 
 pub fn ago(buf: []u8, now: i64, then: i64) []const u8 {
     if (then <= 0) return "–";
+    const min = std.time.s_per_min;
+    const hour = std.time.s_per_hour;
+    const day = std.time.s_per_day;
+    const week = std.time.s_per_week;
+    const month = 30 * day;
+    const year = 365 * day;
     const d = now - then;
-    if (d < 60) return "Just now";
-    if (d < 3600) return std.fmt.bufPrint(buf, "{d} min ago", .{@divTrunc(d, 60)}) catch "?";
-    if (d < 86400) return std.fmt.bufPrint(buf, "{d} hours ago", .{@divTrunc(d, 3600)}) catch "?";
-    if (d < 2 * 86400) return "Yesterday";
-    if (d < 14 * 86400) return std.fmt.bufPrint(buf, "{d} days ago", .{@divTrunc(d, 86400)}) catch "?";
-    if (d < 60 * 86400) return std.fmt.bufPrint(buf, "{d} weeks ago", .{@divTrunc(d, 7 * 86400)}) catch "?";
-    if (d < 365 * 86400) return std.fmt.bufPrint(buf, "{d} months ago", .{@divTrunc(d, 30 * 86400)}) catch "?";
-    const y = @divTrunc(d, 365 * 86400);
+    if (d < min) return "Just now";
+    if (d < hour) return std.fmt.bufPrint(buf, "{d} min ago", .{@divTrunc(d, min)}) catch "?";
+    if (d < day) return std.fmt.bufPrint(buf, "{d} hours ago", .{@divTrunc(d, hour)}) catch "?";
+    if (d < 2 * day) return "Yesterday";
+    if (d < 2 * week) return std.fmt.bufPrint(buf, "{d} days ago", .{@divTrunc(d, day)}) catch "?";
+    if (d < 2 * month) return std.fmt.bufPrint(buf, "{d} weeks ago", .{@divTrunc(d, week)}) catch "?";
+    if (d < year) return std.fmt.bufPrint(buf, "{d} months ago", .{@divTrunc(d, month)}) catch "?";
+    const y = @divTrunc(d, year);
     return if (y == 1) "1 year ago" else std.fmt.bufPrint(buf, "{d} years ago", .{y}) catch "?";
 }

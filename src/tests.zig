@@ -14,7 +14,17 @@ const machine = @import("machine.zig");
 const iokit = @import("iokit.zig");
 const view_clean = @import("view_clean.zig");
 const view_card = @import("view_card.zig");
+const measure = @import("measure.zig");
+const info_plist = @import("plist.zig");
+const usage = @import("usage.zig");
+const fuzzy = @import("fuzzy.zig");
 const objc = nanoui.objc;
+
+extern "c" fn opendir(path: [*:0]const u8) ?*anyopaque;
+extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
+extern "c" fn closedir(dir: *anyopaque) c_int;
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+const Dirent = extern struct { ino: u64, seekoff: u64, reclen: u16, namlen: u16, kind: u8, name: [1024]u8 };
 
 extern "c" const kCFRunLoopDefaultMode: *anyopaque;
 extern "c" fn CFRunLoopRunInMode(mode: *anyopaque, seconds: f64, once: bool) i32;
@@ -30,13 +40,24 @@ extern "c" fn time(t: ?*i64) i64;
 
 const gpa = std.testing.allocator;
 
+const compact_w = @import("app.zig").window_w;
+const compact_h = @import("app.zig").window_h;
+const wide_w = 1240;
+const wide_h = 820;
+const me_uid = 501;
+const sampled_far_ahead = 1e9;
+const spin_seconds = 0.05;
+const max_spins = 600;
+
 const Tmp = struct {
     buf: [64:0]u8,
     len: usize,
 
+    const prefix = "/tmp/nanokeep-test-";
+
     fn make() !Tmp {
         var t: Tmp = .{ .buf = @splat(0), .len = 0 };
-        const tmpl = "/tmp/nanokeep-test-XXXXXX";
+        const tmpl = prefix ++ "XXXXXX";
         @memcpy(t.buf[0..tmpl.len], tmpl);
         _ = mkdtemp(&t.buf) orelse return error.TmpDir;
         t.len = tmpl.len;
@@ -45,6 +66,10 @@ const Tmp = struct {
 
     fn path(t: *const Tmp) [:0]const u8 {
         return t.buf[0..t.len :0];
+    }
+
+    fn id(t: *const Tmp) []const u8 {
+        return t.path()[prefix.len..];
     }
 
     fn sub(t: *const Tmp, buf: []u8, name: []const u8) ![:0]const u8 {
@@ -76,6 +101,17 @@ fn shellNumber(comptime fmt: []const u8, args: anytype) !u64 {
     return std.fmt.parseInt(u64, text[0..end], 10);
 }
 
+fn plutilString(buf: []u8, file: []const u8, key: []const u8) !?[]const u8 {
+    var cmd: [1400]u8 = undefined;
+    const s = try std.fmt.bufPrintSentinel(&cmd, "/usr/bin/plutil -extract {s} raw -expect string -o - '{s}' 2>/dev/null; echo \" $?\"", .{ key, file }, 0);
+    const f = popen(s, "r") orelse return error.Popen;
+    const n = fread(buf.ptr, 1, buf.len, f);
+    _ = pclose(f);
+    const out = buf[0..n];
+    if (!std.mem.endsWith(u8, out, " 0\n")) return null;
+    return std.mem.trimEnd(u8, out[0 .. n - 3], "\n");
+}
+
 fn duBytes(path: []const u8) !u64 {
     return (try shellNumber("/usr/bin/du -sk '{s}' 2>/dev/null", .{path})) * 1024;
 }
@@ -88,16 +124,46 @@ fn newestTime(path: []const u8) !u64 {
     return shellNumber("/usr/bin/find '{s}' -exec /usr/bin/stat -f %m {{}} + | /usr/bin/sort -n | /usr/bin/tail -1", .{path});
 }
 
+test "a directory read lists every entry and its kind across many buffer refills" {
+    const Dir = @import("dir.zig").Dir;
+    var t = try Tmp.make();
+    defer t.remove();
+    const long: [200]u8 = @splat('n');
+    try t.sh("mkdir sub && for i in $(seq 1 600); do : > {s}$i; done", .{&long});
+    try std.testing.expectEqual(601, try shellNumber("/bin/ls -A '{s}' | /usr/bin/wc -l", .{t.path()}));
+    var d = Dir.open(t.path()) orelse return error.Open;
+    defer d.close();
+    var files: usize = 0;
+    var dirs: usize = 0;
+    while (d.next()) |e| {
+        if (std.mem.eql(u8, e.name, ".") or std.mem.eql(u8, e.name, "..")) continue;
+        if (e.kind == @import("dir.zig").DT_DIR) {
+            try std.testing.expectEqualStrings("sub", e.name);
+            dirs += 1;
+        } else {
+            try std.testing.expect(std.mem.startsWith(u8, e.name, &long));
+            files += 1;
+        }
+    }
+    try std.testing.expectEqual(600, files);
+    try std.testing.expectEqual(1, dirs);
+}
+
+test "a directory read of a missing folder fails" {
+    try std.testing.expect(@import("dir.zig").Dir.open("/nonexistent/nanokeep-dir") == null);
+}
+
 test "the walker agrees with du and find on sizes, files and change times" {
     const t = try Tmp.make();
     defer t.remove();
-    try t.sh("mkdir -p a/b/c d && dd if=/dev/urandom of=a/one bs=1000 count=37 2>/dev/null && dd if=/dev/urandom of=a/b/c/two bs=4096 count=300 2>/dev/null && printf x > d/tiny && ln a/b/c/two d/same && dd if=/dev/urandom of=../nanokeep-outside-{s} bs=1m count=3 2>/dev/null && ln -s ../nanokeep-outside-{s} d/link && touch -t 202001010000 a/one", .{ t.path()[19..], t.path()[19..] });
-    defer t.sh("rm -f ../nanokeep-outside-{s}", .{t.path()[19..]}) catch {};
+    const outside_mb = 3;
+    try t.sh("mkdir -p a/b/c d && dd if=/dev/urandom of=a/one bs=1000 count=37 2>/dev/null && dd if=/dev/urandom of=a/b/c/two bs=4096 count=300 2>/dev/null && printf x > d/tiny && ln a/b/c/two d/same && dd if=/dev/urandom of=../nanokeep-outside-{s} bs=1m count={d} 2>/dev/null && ln -s ../nanokeep-outside-{s} d/link && touch -t 202001010000 a/one", .{ t.id(), outside_mb, t.id() });
+    defer t.sh("rm -f ../nanokeep-outside-{s}", .{t.id()}) catch {};
     const got = walk.measure(gpa, t.path().ptr);
     try std.testing.expectEqual(try duBytes(t.path()), got.bytes);
     try std.testing.expectEqual(try uniqueFiles(t.path()), got.files);
     try std.testing.expectEqual(try newestTime(t.path()), @as(u64, @intCast(got.newest)));
-    try std.testing.expect(got.bytes < 3 * 1024 * 1024);
+    try std.testing.expect(got.bytes < outside_mb << 20);
 }
 
 test "the walker agrees with du and find on a real source tree" {
@@ -120,6 +186,187 @@ test "the walker measures a single file" {
     try std.testing.expectEqual(try newestTime(f), @as(u64, @intCast(got.newest)));
 }
 
+test "the walker measures a tree deeper than a recursive walk could hold" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("p=$(printf 'd/%.0s' $(seq 400)) && mkdir -p $p && dd if=/dev/urandom of=${{p}}bottom bs=4096 count=3 2>/dev/null", .{});
+    const got = walk.measure(gpa, t.path().ptr);
+    try std.testing.expectEqual(try duBytes(t.path()), got.bytes);
+    try std.testing.expectEqual(@as(u64, 1), got.files);
+}
+
+test "a repeat walk reuses unchanged folders and lists only the folders that changed" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p a b/c d/e/f && for f in 1 2 3; do printf x > a/$f; done && dd if=/dev/urandom of=b/c/one bs=4096 count=4 2>/dev/null && printf y > d/e/f/deep", .{});
+    var first = walk.measureAgain(gpa, t.path().ptr, null, walk.max_nodes);
+    defer if (first.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 7), first.listed);
+    try std.testing.expectEqual(try duBytes(t.path()), first.size.bytes);
+
+    var second = walk.measureAgain(gpa, t.path().ptr, &first.tree.?, walk.max_nodes);
+    defer if (second.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 0), second.listed);
+    try std.testing.expectEqual(first.size.bytes, second.size.bytes);
+    try std.testing.expectEqual(first.size.files, second.size.files);
+    try std.testing.expectEqual(first.size.newest, second.size.newest);
+
+    try t.sh("dd if=/dev/urandom of=b/c/two bs=4096 count=9 2>/dev/null && mkdir a/new && printf z > a/new/file", .{});
+    var third = walk.measureAgain(gpa, t.path().ptr, &second.tree.?, walk.max_nodes);
+    defer if (third.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 3), third.listed);
+    try std.testing.expectEqual(try duBytes(t.path()), third.size.bytes);
+    try std.testing.expectEqual(try uniqueFiles(t.path()), third.size.files);
+    try std.testing.expectEqual(try newestTime(t.path()), @as(u64, @intCast(third.size.newest)));
+}
+
+test "a repeat walk of a tree deeper than one path can name reuses it and sees a change at the bottom" {
+    const t = try Tmp.make();
+    defer t.remove();
+    const depth = 600;
+    const block = 4096;
+    const more_blocks = 5;
+    try t.sh("for i in $(seq {d}); do mkdir d; cd d; done; printf x > bottom", .{depth});
+    var first = walk.measureAgain(gpa, t.path().ptr, null, walk.max_nodes);
+    defer if (first.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, depth + 1), first.listed);
+    try std.testing.expectEqual(@as(u64, block), first.size.bytes);
+    var second = walk.measureAgain(gpa, t.path().ptr, &first.tree.?, walk.max_nodes);
+    defer if (second.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 0), second.listed);
+    try std.testing.expectEqual(first.size.bytes, second.size.bytes);
+    try std.testing.expectEqual(@as(u64, 1), second.size.files);
+    try t.sh("for i in $(seq {d}); do cd d; done; dd if=/dev/urandom of=more bs={d} count={d} 2>/dev/null", .{ depth, block, more_blocks });
+    var third = walk.measureAgain(gpa, t.path().ptr, &second.tree.?, walk.max_nodes);
+    defer if (third.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, 1), third.listed);
+    try std.testing.expectEqual(@as(u64, block + more_blocks * block), third.size.bytes);
+    try std.testing.expectEqual(@as(u64, 2), third.size.files);
+}
+
+test "a repeat walk counts a file hard-linked from an unchanged and a changed folder once" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir a b && dd if=/dev/urandom of=a/x bs=4096 count=6 2>/dev/null && ln a/x b/x", .{});
+    var first = walk.measureAgain(gpa, t.path().ptr, null, walk.max_nodes);
+    defer if (first.tree) |*tr| tr.deinit(gpa);
+    try t.sh("printf y > b/new", .{});
+    var second = walk.measureAgain(gpa, t.path().ptr, &first.tree.?, walk.max_nodes);
+    defer if (second.tree) |*tr| tr.deinit(gpa);
+    try std.testing.expectEqual(try duBytes(t.path()), second.size.bytes);
+    try std.testing.expectEqual(try uniqueFiles(t.path()), second.size.files);
+}
+
+test "the scan cache keeps trees only while their folders fit in its bound" {
+    var cache: walk.Cache = .{};
+    defer cache.deinit(gpa);
+    const half = walk.max_nodes / 2 + 1;
+    for ([_][]const u8{ "/first", "/second" }) |p| {
+        const nodes = try gpa.alloc(walk.Node, half);
+        @memset(nodes, .{ .mtime = 0, .name_at = 0, .name_len = 0 });
+        cache.put(gpa, p, .{ .nodes = nodes, .names = try gpa.alloc(u8, 0) });
+    }
+    try std.testing.expect(cache.get("/first") != null);
+    try std.testing.expect(cache.get("/second") == null);
+}
+
+test "a walk over more folders than the cache holds records nothing and still measures right" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p a b/c d/e/f && printf x > a/1 && printf y > d/e/f/deep", .{});
+    const m = walk.measureAgain(gpa, t.path().ptr, null, 3);
+    try std.testing.expect(m.tree == null);
+    try std.testing.expectEqual(try duBytes(t.path()), m.size.bytes);
+    try std.testing.expectEqual(@as(u64, 2), m.size.files);
+}
+
+const plist_keys = [_][]const u8{ "CFBundleDisplayName", "CFBundleName", "CFBundleShortVersionString", "CFBundleVersion", "CFBundleIdentifier", "CFBundleExecutable" };
+
+fn expectPlistLikePlutil(file: [:0]const u8) !void {
+    const data = try info_plist.readFile(gpa, file);
+    defer gpa.free(data);
+    for (plist_keys) |key| {
+        var want_buf: [1024]u8 = undefined;
+        const want = try plutilString(&want_buf, file, key);
+        const got = try info_plist.string(gpa, data, key);
+        defer if (got) |g| gpa.free(g);
+        if (want) |w| {
+            std.testing.expect(got != null) catch |err| {
+                std.debug.print("{s} {s}: want {s}, got none\n", .{ file, key, w });
+                return err;
+            };
+            std.testing.expectEqualStrings(w, got.?) catch |err| {
+                std.debug.print("{s} {s}\n", .{ file, key });
+                return err;
+            };
+        } else try std.testing.expect(got == null);
+    }
+}
+
+test "Info.plist strings read like plutil, in XML and binary form, with missing keys" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("printf '%s' '{s}' > xml.plist && printf '%s' '{s}' > odd.plist && cp odd.plist binary.plist && /usr/bin/plutil -convert binary1 binary.plist", .{ plist, odd_plist });
+    for ([_][]const u8{ "xml.plist", "odd.plist", "binary.plist" }) |name| {
+        var p: [128]u8 = undefined;
+        try expectPlistLikePlutil(try t.sub(&p, name));
+    }
+}
+
+test "a broken or hostile Info.plist reads as missing keys, never a crash" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("printf '%s' '{s}' > b.plist && /usr/bin/plutil -convert binary1 b.plist", .{odd_plist});
+    var p: [128]u8 = undefined;
+    const good = try info_plist.readFile(gpa, try t.sub(&p, "b.plist"));
+    defer gpa.free(good);
+    const bad = try gpa.dupe(u8, good);
+    defer gpa.free(bad);
+    for (0..good.len) |cut| try std.testing.expectEqual(null, try info_plist.string(gpa, good[0..cut], "CFBundleName"));
+    for (0..good.len) |i| for ([_]u8{ 0x00, 0x18, 0x1f, 0x6f, 0xdf, 0xff }) |v| {
+        @memcpy(bad, good);
+        bad[i] = v;
+        if (try info_plist.string(gpa, bad, "CFBundleName")) |s| gpa.free(s);
+        if (i + 1 < bad.len) {
+            bad[i] = v | 0x0f;
+            bad[i + 1] = 0x1c;
+            if (try info_plist.string(gpa, bad, "CFBundleName")) |s| gpa.free(s);
+        }
+    };
+    for ([_][]const u8{ "</>", "<dict></>", "<plist><dict><key>CFBundleName</key></", "<dict><key>CFBundleName</key><string>&#xFFFFFFFF;&#;&", "<", "<dict" }) |xml| {
+        try std.testing.expectEqual(null, try info_plist.string(gpa, xml, "CFBundleName"));
+    }
+}
+
+test "Info.plist strings read like plutil for every installed app" {
+    const fewest_apps = 10;
+    var checked: usize = 0;
+    for ([_][:0]const u8{ "/System/Applications", "/Applications" }) |root| {
+        const dir = opendir(root) orelse continue;
+        defer _ = closedir(dir);
+        while (readdir(dir)) |ent| {
+            const name = ent.name[0..ent.namlen];
+            if (!std.mem.endsWith(u8, name, ".app")) continue;
+            var p: [512]u8 = undefined;
+            const file = try std.fmt.bufPrintSentinel(&p, "{s}/{s}/Contents/Info.plist", .{ root, name }, 0);
+            if (access(file, 0) != 0) continue;
+            try expectPlistLikePlutil(file);
+            checked += 1;
+        }
+    }
+    try std.testing.expect(checked > fewest_apps);
+}
+
+extern "c" fn _NSGetExecutablePath(buf: [*]u8, size: *u32) c_int;
+
+test "nothing in nanokeep can call Spotlight" {
+    var exe: [1024]u8 = undefined;
+    var len: u32 = exe.len;
+    try std.testing.expectEqual(@as(c_int, 0), _NSGetExecutablePath(&exe, &len));
+    const path = std.mem.sliceTo(&exe, 0);
+    try std.testing.expectEqual(@as(u64, 0), try shellNumber("/usr/bin/strings -a '{s}' | /usr/bin/grep -c -E 'M[D]Item|M[D]Query|NSMetadat[a]Query|mdfin[d]|CoreService[s]'", .{path}));
+}
+
 test "the parallel pool gives each path its own size" {
     const t = try Tmp.make();
     defer t.remove();
@@ -128,7 +375,7 @@ test "the parallel pool gives each path its own size" {
     var py: [128]u8 = undefined;
     const paths = [_][:0]const u8{ try t.sub(&px, "x"), try t.sub(&py, "y") };
     var out: [2]walk.Size = .{ .{}, .{} };
-    var pool: walk.Pool = .{ .gpa = std.heap.smp_allocator, .paths = &paths, .out = &out };
+    var pool: walk.Pool = .{ .gpa = gpa, .paths = &paths, .out = &out };
     pool.run();
     try std.testing.expectEqual(try duBytes(paths[0]), out[0].bytes);
     try std.testing.expectEqual(try duBytes(paths[1]), out[1].bytes);
@@ -231,7 +478,11 @@ test "cleaning trashes only selected categories, and stale temporary files only"
     const caches = &cl.cats[@intFromEnum(cleaner.Kind.caches)];
     try std.testing.expectEqual(@as(usize, 1), caches.items().len);
     try std.testing.expect(std.mem.endsWith(u8, caches.items()[0].path, "com.vendor.app"));
-    try std.testing.expect(caches.bytes() >= 20 * 4096);
+    var cb: [160]u8 = undefined;
+    var sb: [160]u8 = undefined;
+    const cache_bytes = try duBytes(try t.sub(&cb, "home/Library/Caches/com.vendor.app"));
+    const stale_bytes = try duBytes(try t.sub(&sb, "tmp/stale.log"));
+    try std.testing.expectEqual(cache_bytes, caches.bytes());
     try std.testing.expectEqual(@as(u64, 1), caches.files());
     const temp = &cl.cats[@intFromEnum(cleaner.Kind.temporary)];
     try std.testing.expectEqual(@as(usize, 1), temp.items().len);
@@ -251,7 +502,49 @@ test "cleaning trashes only selected categories, and stale temporary files only"
         saw_temp = saw_temp or std.mem.endsWith(u8, p, "tmp/stale.log");
     }
     try std.testing.expect(saw_cache and saw_temp);
-    try std.testing.expect(cl.last.?.moved >= 20 * 4096);
+    try std.testing.expectEqual(cache_bytes + stale_bytes, cl.last.?.moved);
+}
+
+test "a repeat scan lists no unchanged folder, and a change shows in the next scan" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p home/Library/Caches/com.vendor.app/data tmp && dd if=/dev/urandom of=home/Library/Caches/com.vendor.app/data/blob bs=4096 count=20 2>/dev/null", .{});
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.sync = true;
+    const caches = &cl.cats[@intFromEnum(cleaner.Kind.caches)];
+    cl.scan();
+    const first = caches.bytes();
+    try std.testing.expect(cl.listed > 0);
+    cl.scan();
+    try std.testing.expectEqual(@as(u64, 0), cl.listed);
+    try std.testing.expectEqual(first, caches.bytes());
+    try t.sh("dd if=/dev/urandom of=home/Library/Caches/com.vendor.app/data/more bs=4096 count=7 2>/dev/null", .{});
+    cl.scan();
+    try std.testing.expectEqual(@as(u64, 1), cl.listed);
+    var cb: [160]u8 = undefined;
+    try std.testing.expectEqual(try duBytes(try t.sub(&cb, "home/Library/Caches/com.vendor.app")), caches.bytes());
+    try std.testing.expectEqual(@as(u64, 2), caches.files());
+}
+
+test "a file rewritten in place inside an old temporary folder keeps that folder out of the next scan" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p home tmp/old/inner && printf o > tmp/old/inner/file && touch -t 202001010000 tmp/old/inner/file tmp/old/inner tmp/old", .{});
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.sync = true;
+    const temp = &cl.cats[@intFromEnum(cleaner.Kind.temporary)];
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 1), temp.items().len);
+    try std.testing.expect(std.mem.endsWith(u8, temp.items()[0].path, "tmp/old"));
+    try t.sh("printf n > tmp/old/inner/file", .{});
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 0), temp.items().len);
 }
 
 test "cleaning the developer category removes clean worktrees with git" {
@@ -267,7 +560,8 @@ test "cleaning the developer category removes clean worktrees with git" {
     const dev = &cl.cats[@intFromEnum(cleaner.Kind.developer)];
     try std.testing.expectEqual(@as(usize, 1), dev.items().len);
     try std.testing.expect(dev.items()[0].repo != null);
-    try std.testing.expect(dev.bytes() >= 8 * 4096);
+    var sb: [160]u8 = undefined;
+    try std.testing.expectEqual(try duBytes(try t.sub(&sb, "devv/spare")), dev.bytes());
     for (&cl.cats) |*c| c.selected = c.spec.kind == .developer;
     try std.testing.expect(cl.selectedForever());
     cl.clean();
@@ -289,16 +583,20 @@ fn record(pid: c_int, sig: c_int) callconv(.c) c_int {
 
 test "quitting refuses itself and other users' processes" {
     defer sent.clearAndFree(gpa);
+    const launchd = 1;
+    const root = 0;
+    const mine = 4242;
     var s: procs.Sampler = .init(gpa, "/");
     defer s.deinit();
     try s.procs.append(gpa, .{ .pid = s.self_pid, .uid = s.uid });
-    try s.procs.append(gpa, .{ .pid = 1, .uid = 0 });
-    try s.procs.append(gpa, .{ .pid = 4242, .uid = s.uid });
+    try s.procs.append(gpa, .{ .pid = launchd, .uid = root });
+    try s.procs.append(gpa, .{ .pid = mine, .uid = s.uid });
     try std.testing.expectError(error.Itself, s.quit(s.self_pid, .quit, record));
-    if (s.uid != 0) try std.testing.expectError(error.NotYours, s.quit(1, .force, record));
-    try s.quit(4242, .force, record);
-    try std.testing.expectEqual([2]c_int{ 4242, 9 }, sent.items[0]);
-    try std.testing.expectError(error.Failed, s.quit(4242, .quit, refuse));
+    if (s.uid != root) try std.testing.expectError(error.NotYours, s.quit(launchd, .force, record));
+    try s.quit(mine, .force, record);
+    try s.quit(mine, .quit, record);
+    try std.testing.expectEqualSlices([2]c_int, &.{ .{ mine, @intFromEnum(std.c.SIG.KILL) }, .{ mine, @intFromEnum(std.c.SIG.TERM) } }, sent.items);
+    try std.testing.expectError(error.Failed, s.quit(mine, .quit, refuse));
 }
 
 test "the sampler reads this machine" {
@@ -306,7 +604,8 @@ test "the sampler reads this machine" {
     defer s.deinit();
     s.sample(0);
     s.sample(1);
-    try std.testing.expect(s.procs.items.len > 10);
+    const fewest_procs = 10;
+    try std.testing.expect(s.procs.items.len > fewest_procs);
     const me = s.find(s.self_pid).?;
     try std.testing.expect(me.threads >= 1);
     try std.testing.expect(me.cpu_time_ns > 0);
@@ -320,16 +619,16 @@ test "processes group under their outermost app" {
     try std.testing.expectEqualStrings("", procs.outerBundle("/usr/libexec/logd"));
     const zed = "/Applications/Zed.app";
     const items = [_]procs.Proc{
-        .{ .pid = 10, .uid = 501, .name = "Zed", .bundle = zed, .memory = 300, .cpu = 2, .threads = 20, .known = true },
-        .{ .pid = 11, .uid = 501, .name = "Zed Helper", .bundle = zed, .memory = 200, .cpu = 1, .threads = 5, .known = true },
-        .{ .pid = 12, .uid = 501, .name = "zsh", .memory = 50, .known = true },
+        .{ .pid = 10, .uid = me_uid, .name = "Zed", .bundle = zed, .memory = 300, .cpu = 2, .threads = 20, .known = true },
+        .{ .pid = 11, .uid = me_uid, .name = "Zed Helper", .bundle = zed, .memory = 200, .cpu = 1, .threads = 5, .known = true },
+        .{ .pid = 12, .uid = me_uid, .name = "zsh", .memory = 50, .known = true },
         .{ .pid = 1, .uid = 0, .name = "launchd", .memory = 900, .known = true },
     };
     var expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
     defer expanded.deinit(gpa);
     var t: groups.Table = .{ .gpa = gpa };
     defer t.deinit();
-    try t.build(&items, .{ .show = .all, .uid = 501 }, &expanded);
+    try t.build(&items, .{ .show = .all, .uid = me_uid }, &expanded);
     try std.testing.expectEqual(@as(usize, 3), t.groups.items.len);
     try std.testing.expectEqualStrings("launchd", t.groups.items[0].name);
     const g = t.groups.items[1];
@@ -340,27 +639,166 @@ test "processes group under their outermost app" {
     try std.testing.expectEqual(@as(i32, 10), g.pid);
     try std.testing.expectEqual(@as(usize, 3), t.rows.items.len);
     try expanded.put(gpa, g.key, {});
-    try t.build(&items, .{ .show = .all, .uid = 501 }, &expanded);
+    try t.build(&items, .{ .show = .all, .uid = me_uid }, &expanded);
     try std.testing.expectEqual(@as(usize, 5), t.rows.items.len);
     var pids: std.ArrayList(i32) = .empty;
     defer pids.deinit(gpa);
     try t.pidsOf(t.group(g.key).?, &items, &pids);
     std.mem.sort(i32, pids.items, {}, std.sort.asc(i32));
     try std.testing.expectEqualSlices(i32, &.{ 10, 11 }, pids.items);
-    try t.build(&items, .{ .show = .apps, .uid = 501 }, &expanded);
+    try t.build(&items, .{ .show = .apps, .uid = me_uid }, &expanded);
     try std.testing.expectEqual(@as(usize, 1), t.groups.items.len);
-    try t.build(&items, .{ .show = .system, .uid = 501 }, &expanded);
+    try t.build(&items, .{ .show = .system, .uid = me_uid }, &expanded);
     try std.testing.expectEqualStrings("launchd", t.groups.items[0].name);
-    try t.build(&items, .{ .show = .mine, .uid = 501, .sort = .name }, &expanded);
+    try t.build(&items, .{ .show = .mine, .uid = me_uid, .sort = .name }, &expanded);
     try std.testing.expectEqualStrings("Zed", t.groups.items[0].name);
     try std.testing.expectEqualStrings("zsh", t.groups.items[1].name);
-    try t.build(&items, .{ .show = .all, .uid = 501, .query = "helper" }, &expanded);
+    try t.build(&items, .{ .show = .all, .uid = me_uid, .query = "helper" }, &expanded);
     try std.testing.expectEqual(@as(usize, 1), t.shown);
 }
 
-fn header64(cpu: u32) [32]u8 {
-    var h: [32]u8 = @splat(0);
-    std.mem.writeInt(u32, h[0..4], 0xfeedfacf, .little);
+fn expectGroups(t: *const groups.Table, names: []const []const u8) !void {
+    errdefer for (t.groups.items) |g| std.debug.print("  group {s}\n", .{g.name});
+    try std.testing.expectEqual(names.len, t.groups.items.len);
+    for (names, t.groups.items) |n, g| try std.testing.expectEqualStrings(n, g.name);
+}
+
+test "searching processes ranks groups by match, and a picked app wins a tie" {
+    const tmp = try Tmp.make();
+    defer tmp.remove();
+    try tmp.sh("mkdir -p 'Twin A.app' 'Twin B.app'", .{});
+    var b1: [128]u8 = undefined;
+    var b2: [128]u8 = undefined;
+    const twin_a = try tmp.sub(&b1, "Twin A.app");
+    const twin_b = try tmp.sub(&b2, "Twin B.app");
+    const items = [_]procs.Proc{
+        .{ .pid = 1, .uid = me_uid, .name = "zsh", .memory = 900 },
+        .{ .pid = 2, .uid = me_uid, .name = "lemonaded", .memory = 800 },
+        .{ .pid = 3, .uid = me_uid, .name = "Activity Monitor", .bundle = "/Applications/Activity Monitor.app", .memory = 700 },
+        .{ .pid = 4, .uid = me_uid, .name = "monitorpro", .bundle = "/Applications/Monitor Pro.app", .memory = 100 },
+        .{ .pid = 5, .uid = me_uid, .name = "twin", .bundle = twin_a, .memory = 60 },
+        .{ .pid = 6, .uid = me_uid, .name = "twin", .bundle = twin_b, .memory = 50 },
+    };
+    var expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var t: groups.Table = .{ .gpa = gpa };
+    defer t.deinit();
+    try t.build(&items, .{ .show = .all, .uid = me_uid, .query = "mon" }, &expanded);
+    try expectGroups(&t, &.{ "Monitor Pro", "Activity Monitor", "lemonaded" });
+
+    const now = 10_000;
+    var ledger: usage.Ledger = .{ .gpa = gpa, .home = tmp.path() };
+    defer ledger.deinit();
+    try t.build(&items, .{ .show = .all, .uid = me_uid, .query = "twin", .ledger = &ledger, .now = now }, &expanded);
+    try expectGroups(&t, &.{ "Twin A", "Twin B" });
+    ledger.pick(twin_b);
+    try t.build(&items, .{ .show = .all, .uid = me_uid, .query = "twin", .ledger = &ledger, .now = now }, &expanded);
+    try expectGroups(&t, &.{ "Twin B", "Twin A" });
+    try t.build(&items, .{ .show = .all, .uid = me_uid, .ledger = &ledger, .now = now }, &expanded);
+    try std.testing.expectEqualStrings("zsh", t.groups.items[0].name);
+}
+
+fn expectApps(a: *const App, names: []const []const u8) !void {
+    errdefer for (a.app_rows.items) |r| std.debug.print("  app {s}\n", .{a.inventory.apps.items[r].name});
+    try std.testing.expectEqual(names.len, a.app_rows.items.len);
+    for (names, a.app_rows.items) |n, r| try std.testing.expectEqualStrings(n, a.inventory.apps.items[r].name);
+}
+
+fn appIndex(a: *const App, name: []const u8) !usize {
+    for (a.inventory.apps.items, 0..) |info, i| if (std.mem.eql(u8, info.name, name)) return i;
+    return error.NoSuchApp;
+}
+
+test "searching apps ranks the best match first, and a picked or recently run app wins a tie" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p 'Apps/Activity Monitor.app' 'Apps/Monitor Pro.app' Apps/Lemonade.app 'Apps/Twin A.app' 'Apps/Twin B.app' 'Apps/Mail One.app' 'Apps/Mail Two.app'", .{});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.inventory.sync = true;
+    a.inventory.load();
+    a.app_query.set("mon");
+    a.refresh();
+    try expectApps(&a, &.{ "Monitor Pro", "Activity Monitor", "Mail One", "Lemonade" });
+
+    a.app_query.set("twin");
+    a.refresh();
+    try expectApps(&a, &.{ "Twin A", "Twin B" });
+    a.selectApp(try appIndex(&a, "Twin B"));
+    a.app_query.set("twi");
+    a.refresh();
+    try expectApps(&a, &.{ "Twin B", "Twin A" });
+
+    a.app_query.set("mail");
+    a.refresh();
+    try expectApps(&a, &.{ "Mail One", "Mail Two" });
+    a.usage.observe(&.{.{ .pid = 9, .uid = me_uid, .bundle = a.inventory.apps.items[try appIndex(&a, "Mail Two")].path }}, a.now() - std.time.s_per_min);
+    a.refresh();
+    try expectApps(&a, &.{ "Mail Two", "Mail One" });
+
+    a.app_query.clear();
+    a.refresh();
+    try expectApps(&a, &.{ "Activity Monitor", "Lemonade", "Mail One", "Mail Two", "Monitor Pro", "Twin A", "Twin B" });
+}
+
+fn expectRanked(query: []const u8, best_first: []const []const u8) !void {
+    for (best_first, 0..) |text, i| {
+        const s = fuzzy.score(query, text) orelse {
+            std.debug.print("\"{s}\" does not match \"{s}\"\n", .{ query, text });
+            return error.NoMatch;
+        };
+        if (i == 0) continue;
+        const above = fuzzy.score(query, best_first[i - 1]).?;
+        if (above <= s) {
+            std.debug.print("\"{s}\": \"{s}\" ({d}) should rank above \"{s}\" ({d})\n", .{ query, best_first[i - 1], above, text, s });
+            return error.WrongOrder;
+        }
+    }
+}
+
+test "the matcher ranks a prefix, then a word start, then a run inside a word, then scattered letters" {
+    try expectRanked("mon", &.{ "Monitor", "Activity Monitor", "Mail One", "Lemonade" });
+    try expectRanked("act", &.{ "Activity Monitor", "Contacts", "Raycast" });
+    try expectRanked("vsc", &.{ "Visual Studio Code", "Movies Scanner" });
+    try expectRanked("chrome", &.{ "Chrome", "Google Chrome", "Google Chrome Helper (Renderer)" });
+}
+
+test "the matcher ignores case and matches camel-case word starts" {
+    try std.testing.expect(fuzzy.score("SAFARI", "Safari") != null);
+    try expectRanked("wk", &.{ "WebKit", "awkward" });
+}
+
+test "the matcher tolerates a typo in queries of five letters or more, below an exact match" {
+    try std.testing.expect(fuzzy.score("twin", "Activity Monitor") == null);
+    try std.testing.expect(fuzzy.score("chorme", "Google Chrome") != null);
+    try std.testing.expect(fuzzy.score("sfaari", "Safari") != null);
+    try std.testing.expect(fuzzy.score("termnal", "Terminal") != null);
+    try std.testing.expect(fuzzy.score("tirminal", "Terminal") != null);
+    try expectRanked("notes", &.{ "Notes", "Nodes" });
+    try std.testing.expect(fuzzy.score("cx", "Chrome") == null);
+    try std.testing.expect(fuzzy.score("xcode", "Calculator") == null);
+    try std.testing.expect(fuzzy.score("chorme", "Calendar") == null);
+}
+
+test "the matcher matches an empty query to everything and nothing to an empty text" {
+    try std.testing.expect(fuzzy.score("", "Finder") != null);
+    try std.testing.expect(fuzzy.score("a", "") == null);
+}
+
+const MH_MAGIC_64: u32 = 0xfeedfacf;
+const FAT_MAGIC: u32 = 0xcafebabe;
+const FAT_MAGIC_64: u32 = 0xcafebabf;
+const CPU_TYPE_ARM64: u32 = 0x0100000c;
+const CPU_TYPE_X86_64: u32 = 0x01000007;
+const fat_arch_size = 20;
+const fat_arch_64_size = 32;
+const fat_header_size = 8;
+const mach_header_64_size = 32;
+
+fn header64(cpu: u32) [mach_header_64_size]u8 {
+    var h: [mach_header_64_size]u8 = @splat(0);
+    std.mem.writeInt(u32, h[0..4], MH_MAGIC_64, .little);
     std.mem.writeInt(u32, h[4..8], cpu, .little);
     return h;
 }
@@ -369,15 +807,15 @@ fn fatHeader(magic: u32, step: usize, cpus: []const u32) [128]u8 {
     var h: [128]u8 = @splat(0);
     std.mem.writeInt(u32, h[0..4], magic, .big);
     std.mem.writeInt(u32, h[4..8], @intCast(cpus.len), .big);
-    for (cpus, 0..) |cpu, i| std.mem.writeInt(u32, h[8 + i * step ..][0..4], cpu, .big);
+    for (cpus, 0..) |cpu, i| std.mem.writeInt(u32, h[fat_header_size + i * step ..][0..4], cpu, .big);
     return h;
 }
 
 test "an app's kind comes from its Mach-O header" {
-    try std.testing.expectEqual(apps.Kind.apple, apps.kindOf(&header64(0x0100000c)));
-    try std.testing.expectEqual(apps.Kind.intel, apps.kindOf(&header64(0x01000007)));
-    try std.testing.expectEqual(apps.Kind.universal, apps.kindOf(&fatHeader(0xcafebabe, 20, &.{ 0x01000007, 0x0100000c })));
-    try std.testing.expectEqual(apps.Kind.apple, apps.kindOf(&fatHeader(0xcafebabf, 32, &.{0x0100000c})));
+    try std.testing.expectEqual(apps.Kind.apple, apps.kindOf(&header64(CPU_TYPE_ARM64)));
+    try std.testing.expectEqual(apps.Kind.intel, apps.kindOf(&header64(CPU_TYPE_X86_64)));
+    try std.testing.expectEqual(apps.Kind.universal, apps.kindOf(&fatHeader(FAT_MAGIC, fat_arch_size, &.{ CPU_TYPE_X86_64, CPU_TYPE_ARM64 })));
+    try std.testing.expectEqual(apps.Kind.apple, apps.kindOf(&fatHeader(FAT_MAGIC_64, fat_arch_64_size, &.{CPU_TYPE_ARM64})));
     try std.testing.expectEqual(apps.Kind.unknown, apps.kindOf("#!/bin/sh\n"));
     const f = std.c.fopen("/usr/bin/true", "rb") orelse return error.Open;
     defer _ = std.c.fclose(f);
@@ -397,15 +835,24 @@ test "bytes, durations and dates read as Finder shows them" {
     try std.testing.expectEqualStrings("1.5 MB", procs.bytes(&b, 1_500_000));
     try std.testing.expectEqualStrings("120 GB", procs.bytes(&b, 120_000_000_000));
     try std.testing.expectEqualStrings("0:01.50", procs.duration(&b, 1_500_000_000));
-    try std.testing.expectEqualStrings("1:01:05", procs.duration(&b, 3665 * std.time.ns_per_s));
+    const min = std.time.s_per_min;
+    const hour = std.time.s_per_hour;
+    const day = std.time.s_per_day;
+    try std.testing.expectEqualStrings("1:01:05", procs.duration(&b, (hour + min + 5) * std.time.ns_per_s));
     const now: i64 = 1_800_000_000;
     try std.testing.expectEqualStrings("–", procs.ago(&b, now, 0));
     try std.testing.expectEqualStrings("Just now", procs.ago(&b, now, now - 10));
-    try std.testing.expectEqualStrings("5 min ago", procs.ago(&b, now, now - 300));
-    try std.testing.expectEqualStrings("3 hours ago", procs.ago(&b, now, now - 3 * 3600));
-    try std.testing.expectEqualStrings("Yesterday", procs.ago(&b, now, now - 30 * 3600));
-    try std.testing.expectEqualStrings("4 days ago", procs.ago(&b, now, now - 4 * 86400));
-    try std.testing.expectEqualStrings("2 years ago", procs.ago(&b, now, now - 800 * 86400));
+    try std.testing.expectEqualStrings("5 min ago", procs.ago(&b, now, now - 5 * min));
+    try std.testing.expectEqualStrings("3 hours ago", procs.ago(&b, now, now - 3 * hour));
+    try std.testing.expectEqualStrings("Yesterday", procs.ago(&b, now, now - 30 * hour));
+    try std.testing.expectEqualStrings("4 days ago", procs.ago(&b, now, now - 4 * day));
+    try std.testing.expectEqualStrings("3 weeks ago", procs.ago(&b, now, now - 3 * std.time.s_per_week));
+    try std.testing.expectEqualStrings("5 months ago", procs.ago(&b, now, now - 5 * 30 * day));
+    try std.testing.expectEqualStrings("1 year ago", procs.ago(&b, now, now - 400 * day));
+    try std.testing.expectEqualStrings("2 years ago", procs.ago(&b, now, now - 800 * day));
+    try std.testing.expectEqualStrings("7m", metrics.uptime(&b, 7 * min + 30));
+    try std.testing.expectEqualStrings("5h 7m", metrics.uptime(&b, 5 * hour + 7 * min));
+    try std.testing.expectEqualStrings("2d 5h", metrics.uptime(&b, 2 * day + 5 * hour + 7 * min));
 }
 
 test "Full Disk Access is read from whether the TCC database opens" {
@@ -426,15 +873,30 @@ test "Full Disk Access is read from whether the TCC database opens" {
 
 test "the guide sits under System Settings, or low in the middle, inside the screen" {
     const screen: objc.CGRect = .{ .origin = .{ .x = 0, .y = 25 }, .size = .{ .width = 1440, .height = 875 } };
-    const under = fda.anchor(.{ .origin = .{ .x = 400, .y = 300 }, .size = .{ .width = 700, .height = 500 } }, screen);
-    try std.testing.expectEqual(@as(f64, 400 + 350 - 190), under.origin.x);
-    try std.testing.expectEqual(@as(f64, 300 - 110 + 20), under.origin.y);
+    const settings: objc.CGRect = .{ .origin = .{ .x = 400, .y = 300 }, .size = .{ .width = 700, .height = 500 } };
+    const under = fda.anchor(settings, screen);
+    try std.testing.expectEqual(midX(settings), midX(under));
+    try std.testing.expect(under.origin.y < settings.origin.y);
+    try std.testing.expect(under.origin.y + under.size.height > settings.origin.y);
+    try expectInside(under, screen);
+
     const alone = fda.anchor(null, screen);
-    try std.testing.expectEqual(@as(f64, 720 - 190), alone.origin.x);
-    try std.testing.expectEqual(@as(f64, 25 + 80), alone.origin.y);
-    const edge = fda.anchor(.{ .origin = .{ .x = 1300, .y = 0 }, .size = .{ .width = 300, .height = 60 } }, screen);
-    try std.testing.expectEqual(@as(f64, 1440 - 380 - 12), edge.origin.x);
-    try std.testing.expectEqual(@as(f64, 25 + 8), edge.origin.y);
+    try std.testing.expectEqual(midX(screen), midX(alone));
+    try std.testing.expect(alone.origin.y - screen.origin.y < screen.size.height / 4);
+    try expectInside(alone, screen);
+
+    const off_corner = fda.anchor(.{ .origin = .{ .x = 1300, .y = 0 }, .size = .{ .width = 300, .height = 60 } }, screen);
+    try expectInside(off_corner, screen);
+}
+
+fn midX(r: objc.CGRect) f64 {
+    return r.origin.x + r.size.width / 2;
+}
+
+fn expectInside(r: objc.CGRect, screen: objc.CGRect) !void {
+    try std.testing.expect(r.origin.x > screen.origin.x and r.origin.y > screen.origin.y);
+    try std.testing.expect(r.origin.x + r.size.width < screen.origin.x + screen.size.width);
+    try std.testing.expect(r.origin.y + r.size.height < screen.origin.y + screen.size.height);
 }
 
 test "the drag card hands over the app's file URL and allows a copy" {
@@ -456,12 +918,14 @@ test "the drag card hands over the app's file URL and allows a copy" {
     try std.testing.expect(!objc.msg(objc.BOOL, panel, "hidesOnDeactivate", .{}));
     try std.testing.expectEqualStrings("Drag nanokeep into the Full Disk Access list", objc.fromNSString(objc.msg(?objc.Object, g.title.?, "stringValue", .{})));
     const card = g.card.?;
-    const mask = objc.msg(objc.NSUInteger, card, "draggingSession:sourceOperationMaskForDraggingContext:", .{ @as(?objc.Object, null), @as(objc.NSInteger, 0) });
-    try std.testing.expect(mask & 1 != 0);
+    const NSDraggingContextOutsideApplication = 0;
+    const NSDragOperationCopy = 1;
+    const mask = objc.msg(objc.NSUInteger, card, "draggingSession:sourceOperationMaskForDraggingContext:", .{ @as(?objc.Object, null), @as(objc.NSInteger, NSDraggingContextOutsideApplication) });
+    try std.testing.expect(mask & NSDragOperationCopy != 0);
     const f = objc.msg(objc.CGRect, card, "frame", .{});
-    const hit = objc.msg(?objc.Object, card, "hitTest:", .{objc.CGPoint{ .x = f.origin.x + 5, .y = f.origin.y + 5 }});
+    const hit = objc.msg(?objc.Object, card, "hitTest:", .{objc.CGPoint{ .x = midX(f), .y = f.origin.y + f.size.height / 2 }});
     try std.testing.expectEqual(@as(?objc.Object, card), hit);
-    const miss = objc.msg(?objc.Object, card, "hitTest:", .{objc.CGPoint{ .x = f.origin.x - 5, .y = f.origin.y }});
+    const miss = objc.msg(?objc.Object, card, "hitTest:", .{objc.CGPoint{ .x = f.origin.x - 1, .y = f.origin.y }});
     try std.testing.expectEqual(@as(?objc.Object, null), miss);
     try std.testing.expect(g.item.len > 0);
     if (std.c.getenv("NANOKEEP_SHOT_GUIDE")) |out| {
@@ -469,7 +933,8 @@ test "the drag card hands over the app's file URL and allows a copy" {
         const bounds = objc.msg(objc.CGRect, content, "bounds", .{});
         const rep = objc.msg(objc.Object, content, "bitmapImageRepForCachingDisplayInRect:", .{bounds});
         objc.msg(void, content, "cacheDisplayInRect:toBitmapImageRep:", .{ bounds, rep });
-        const png = objc.msg(objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, 4), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) });
+        const NSBitmapImageFileTypePNG = 4;
+        const png = objc.msg(objc.Object, rep, "representationUsingType:properties:", .{ @as(objc.NSUInteger, NSBitmapImageFileTypePNG), objc.msg(objc.Object, objc.class("NSDictionary"), "dictionary", .{}) });
         try std.testing.expect(objc.msg(objc.BOOL, png, "writeToFile:atomically:", .{ objc.nsString(std.mem.span(out)), objc.YES }));
     }
 }
@@ -480,12 +945,20 @@ fn recordAccess(_: *App) void {
     access_asked += 1;
 }
 
+const fake_name = "Fake Tool";
+const fake_version = "2.4.1";
+const second_name = "Second Tool";
+
 const plist =
     \\<?xml version="1.0" encoding="UTF-8"?>
     \\<plist version="1.0"><dict>
-    \\<key>CFBundleName</key><string>Fake Tool</string>
+    \\<key>CFBundleName</key><string>
+++ fake_name ++
+    \\</string>
     \\<key>CFBundleExecutable</key><string>fake</string>
-    \\<key>CFBundleShortVersionString</key><string>2.4.1</string>
+    \\<key>CFBundleShortVersionString</key><string>
+++ fake_version ++
+    \\</string>
     \\<key>CFBundleIdentifier</key><string>dev.nanokeep.fake</string>
     \\</dict></plist>
 ;
@@ -509,7 +982,7 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     var tester: ui.Tester = undefined;
     try tester.init(gpa, .init(&a, view), .{});
     defer tester.deinit();
-    tester.resize(1100, 720);
+    tester.resize(compact_w, compact_h);
     tester.frame();
     try std.testing.expect(tester.hasText("Overview"));
     try tester.clickText("Processes");
@@ -520,13 +993,13 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     try shot(&tester, "NANOKEEP_SHOT_PROCS");
     try tester.clickText("Apps");
     tester.settle(1);
-    try std.testing.expect(tester.hasText("Fake Tool"));
-    try std.testing.expect(tester.hasText("2.4.1"));
+    try std.testing.expect(tester.hasText(fake_name));
+    try std.testing.expect(tester.hasText(fake_version));
     try std.testing.expect(a.inventory.apps.items[0].kind != .unknown);
     try std.testing.expect(tester.hasText(a.inventory.apps.items[0].kind.title()));
     try std.testing.expect(a.inventory.apps.items[0].measured);
     try shot(&tester, "NANOKEEP_SHOT_APPS");
-    try tester.clickText("Fake Tool");
+    try tester.clickText(fake_name);
     tester.settle(1);
     try tester.clickText("Uninstall");
     tester.settle(1);
@@ -536,7 +1009,7 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     tester.settle(1);
     try std.testing.expectEqual(@as(usize, 1), trashed.items.len);
     try std.testing.expect(std.mem.endsWith(u8, trashed.items[0], "Apps/Fake.app"));
-    try std.testing.expect(!tester.hasText("Fake Tool"));
+    try std.testing.expect(!tester.hasText(fake_name));
     clearTrashed();
     try tester.clickText("Cleanup");
     tester.settle(1);
@@ -549,12 +1022,14 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     try std.testing.expect(tester.hasText("com.vendor.big"));
     try shot(&tester, "NANOKEEP_SHOT");
     try std.testing.expectEqual(@as(usize, 0), access_asked);
-    tester.resize(1100, 1400);
+    const tall_h = 1400;
+    tester.resize(compact_w, tall_h);
     tester.settle(1);
     try tester.clickText("Allow Full Disk Access");
     tester.settle(1);
     try std.testing.expectEqual(@as(usize, 1), access_asked);
-    try tester.clickText(cleanLabel(&a));
+    var label: [48]u8 = undefined;
+    try tester.clickText(try cleanLabel(&label, &a));
     tester.settle(1);
     try std.testing.expect(a.confirm_clean);
     try std.testing.expectEqual(@as(usize, 0), trashed.items.len);
@@ -569,11 +1044,9 @@ fn shot(tester: *ui.Tester, env: [:0]const u8) !void {
     try tester.screenshot(std.mem.span(path));
 }
 
-var label_buf: [48]u8 = undefined;
-
-fn cleanLabel(a: *App) []const u8 {
+fn cleanLabel(buf: []u8, a: *App) ![]const u8 {
     var b: [32]u8 = undefined;
-    return std.fmt.bufPrint(&label_buf, "Clean {s}", .{procs.bytes(&b, a.cleaner.selectedBytes())}) catch unreachable;
+    return std.fmt.bufPrint(buf, "Clean {s}", .{procs.bytes(&b, a.cleaner.selectedBytes())});
 }
 
 test "history finds the sample at or before a time, and charts columns across a range" {
@@ -604,23 +1077,35 @@ test "the disk map gives each found slice a dot and what is left to free space" 
     try std.testing.expectEqual(@as(usize, 0), dots[3]);
 }
 
+const RTM_IFINFO2 = 0x12;
+const IFF_UP = 0x1;
+const IFF_LOOPBACK = 0x8;
+const if_msghdr2_size = 160;
+const ifm_type_at = 3;
+const ifm_flags_at = 8;
+const ifi_ibytes_at = 96;
+const ifi_obytes_at = 104;
+
 fn ifinfo(buf: []u8, flags: i32, in: u64, out: u64) void {
     @memset(buf, 0);
     std.mem.writeInt(u16, buf[0..2], @intCast(buf.len), .little);
-    buf[3] = 0x12;
-    std.mem.writeInt(i32, buf[8..12], flags, .little);
-    std.mem.writeInt(u64, buf[96..104], in, .little);
-    std.mem.writeInt(u64, buf[104..112], out, .little);
+    buf[ifm_type_at] = RTM_IFINFO2;
+    std.mem.writeInt(i32, buf[ifm_flags_at..][0..4], flags, .little);
+    std.mem.writeInt(u64, buf[ifi_ibytes_at..][0..8], in, .little);
+    std.mem.writeInt(u64, buf[ifi_obytes_at..][0..8], out, .little);
 }
 
 test "network counters add up the interfaces that are up, leaving out loopback" {
-    var buf: [3 * 160]u8 = undefined;
-    ifinfo(buf[0..160], 0x1, 1000, 10);
-    ifinfo(buf[160..320], 0x1 | 0x8, 5000, 50);
-    ifinfo(buf[320..480], 0x0, 7000, 70);
+    const n = if_msghdr2_size;
+    const up_in = 1000;
+    const up_out = 10;
+    var buf: [3 * n]u8 = undefined;
+    ifinfo(buf[0..n], IFF_UP, up_in, up_out);
+    ifinfo(buf[n .. 2 * n], IFF_UP | IFF_LOOPBACK, 5000, 50);
+    ifinfo(buf[2 * n ..], 0, 7000, 70);
     const got = metrics.sumInterfaces(&buf);
-    try std.testing.expectEqual(@as(u64, 1000), got.in);
-    try std.testing.expectEqual(@as(u64, 10), got.out);
+    try std.testing.expectEqual(@as(u64, up_in), got.in);
+    try std.testing.expectEqual(@as(u64, up_out), got.out);
     const live = metrics.netBytes(gpa);
     try std.testing.expect(live.in > 0);
 }
@@ -646,7 +1131,8 @@ test "the metrics sampler reads this machine" {
     m.sample(1, 2.5);
     try std.testing.expectEqual(@as(usize, 1), m.history.len);
     try std.testing.expect(m.cpu.count > 0);
-    try std.testing.expect(m.cpu.busy() >= 0 and m.cpu.busy() <= 100.5);
+    const rounding = 0.5;
+    try std.testing.expect(m.cpu.busy() >= 0 and m.cpu.busy() <= 100 + rounding);
     try std.testing.expect(m.memory.total > m.memory.used());
     try std.testing.expect(m.memory.app > 0 and m.memory.wired > 0);
     try std.testing.expect(m.disk.read_total > 0);
@@ -659,7 +1145,149 @@ test "the metrics sampler reads this machine" {
 
 fn pump(cl: *const cleaner.Cleaner) void {
     var spins: usize = 0;
-    while (cl.job != null and spins < 600) : (spins += 1) _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    while (cl.job != null and spins < max_spins) : (spins += 1) spin();
+}
+
+fn spin() void {
+    _ = CFRunLoopRunInMode(kCFRunLoopDefaultMode, spin_seconds, true);
+}
+
+test "the app list loads after the first frame, without blocking it" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist", .{plist});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.inventory.load();
+    try std.testing.expect(!a.inventory.loaded);
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(compact_w, compact_h);
+    tester.frame();
+    try tester.clickText("Apps");
+    var spins: usize = 0;
+    while (!a.inventory.loaded and spins < max_spins) : (spins += 1) spin();
+    while (a.inventory.measuring != null and spins < max_spins) : (spins += 1) spin();
+    try std.testing.expect(a.inventory.loaded and a.inventory.measuring == null);
+    tester.settle(1);
+    try std.testing.expect(tester.hasText(fake_name));
+    try std.testing.expect(tester.hasText(fake_version));
+    try std.testing.expect(a.inventory.apps.items[0].kind != .unknown);
+}
+
+test "app usage comes from process samples, survives a restart, and is unknown with no record" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir Foo.app Bar.app Gone.app", .{});
+    var b1: [128]u8 = undefined;
+    var b2: [128]u8 = undefined;
+    var b3: [128]u8 = undefined;
+    var b4: [128]u8 = undefined;
+    const foo = try t.sub(&b1, "Foo.app");
+    const bar = try t.sub(&b2, "Bar.app");
+    const gone = try t.sub(&b3, "Gone.app");
+    const never = try t.sub(&b4, "Never.app");
+    var first: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer first.deinit();
+    first.observe(&.{
+        .{ .pid = 10, .uid = 0, .bundle = foo },
+        .{ .pid = 11, .uid = 0, .bundle = "" },
+        .{ .pid = 12, .uid = 0, .bundle = bar },
+        .{ .pid = 13, .uid = 0, .bundle = gone },
+    }, 1_000);
+    first.observe(&.{.{ .pid = 10, .uid = 0, .bundle = foo }}, 2_000);
+    try std.testing.expectEqual(@as(i64, 2_000), first.lastSeen(foo));
+    try std.testing.expectEqual(@as(i64, 1_000), first.lastSeen(bar));
+    try std.testing.expectEqual(@as(i64, 1_000), first.lastSeen(gone));
+    try std.testing.expectEqual(@as(i64, 0), first.lastSeen(never));
+    try std.testing.expectEqual(@as(i64, 0), first.lastSeen(""));
+    try first.save();
+    try t.sh("rmdir Gone.app", .{});
+
+    var second: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer second.deinit();
+    second.load();
+    try std.testing.expectEqual(@as(i64, 2_000), second.lastSeen(foo));
+    try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(bar));
+    try std.testing.expectEqual(@as(i64, 0), second.lastSeen(gone));
+    try std.testing.expectEqual(@as(i64, 0), second.lastSeen(never));
+    second.observe(&.{.{ .pid = 12, .uid = 0, .bundle = bar }}, 500);
+    try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(bar));
+}
+
+test "the usage ledger keeps how often each app was picked across a save and reload" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Foo.app Bar.app Old.app 'Library/Application Support/nanokeep'", .{});
+    var b1: [128]u8 = undefined;
+    var b2: [128]u8 = undefined;
+    var b3: [128]u8 = undefined;
+    const foo = try t.sub(&b1, "Foo.app");
+    const bar = try t.sub(&b2, "Bar.app");
+    const old = try t.sub(&b3, "Old.app");
+    var first: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer first.deinit();
+    first.observe(&.{.{ .pid = 10, .uid = 0, .bundle = foo }}, 1_000);
+    first.pick(foo);
+    first.pick(foo);
+    first.pick(bar);
+    try first.save();
+
+    var second: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer second.deinit();
+    second.load();
+    const year_later = 1_000 + 365 * std.time.s_per_day;
+    try std.testing.expect(second.boost(foo, year_later) > second.boost(bar, year_later));
+    try std.testing.expect(second.boost(bar, year_later) > 0);
+    try std.testing.expectEqual(@as(i32, 0), second.boost(old, year_later));
+    try std.testing.expectEqual(@as(i64, 1_000), second.lastSeen(foo));
+    try std.testing.expectEqual(@as(i64, 0), second.lastSeen(bar));
+
+    try t.sh("printf '700\\t%s\\n' '{s}' > 'Library/Application Support/nanokeep/usage.tsv'", .{old});
+    var third: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+    defer third.deinit();
+    third.load();
+    try std.testing.expectEqual(@as(i64, 700), third.lastSeen(old));
+    try std.testing.expectEqual(@as(i32, 0), third.boost(old, year_later));
+}
+
+test "the Apps page shows when each app last ran, from the saved usage, and unknown otherwise" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS Apps/Second.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && cp /usr/bin/true Apps/Second.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist && printf '%s' '{s}' > Apps/Second.app/Contents/Info.plist", .{ plist, second_plist });
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var fb: [160]u8 = undefined;
+    const fake = try std.fmt.bufPrint(&fb, "{s}/Apps/Fake.app", .{t.path()});
+    {
+        var ledger: usage.Ledger = .{ .gpa = gpa, .home = t.path() };
+        defer ledger.deinit();
+        ledger.observe(&.{.{ .pid = 1, .uid = 0, .bundle = fake }}, time(null) - 3 * std.time.s_per_day);
+        try ledger.save();
+    }
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.usage.load();
+    a.inventory.sync = true;
+    a.inventory.load();
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(compact_w, compact_h);
+    tester.frame();
+    try tester.clickText("Apps");
+    tester.settle(1);
+    try std.testing.expect(tester.hasText(fake_name));
+    try std.testing.expect(tester.hasText(second_name));
+    try std.testing.expect(tester.hasText("3 days ago"));
+    for (a.inventory.apps.items) |info| {
+        if (std.mem.eql(u8, info.name, second_name)) try std.testing.expectEqual(@as(i64, 0), info.last_opened);
+    }
 }
 
 test "a scan fills in one category at a time, and Cancel stops it" {
@@ -701,6 +1329,82 @@ fn fakeClock() f64 {
     return 0;
 }
 
+fn procNamed(s: *const procs.Sampler, name: []const u8) ?*const procs.Proc {
+    for (s.procs.items) |*p| if (std.mem.eql(u8, p.name, name)) return p;
+    return null;
+}
+
+test "a sample looks up names only for processes that are new since the last one" {
+    const sleeper_cmd = "sleep 41.5";
+    const kill_sleeper = "/usr/bin/pkill -f '" ++ sleeper_cmd ++ "'";
+    const let_it_start = "/bin/sleep 0.2";
+    const fewest_procs = 20;
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    s.sample(0);
+    const everyone = s.procs.items.len;
+    try std.testing.expect(everyone > fewest_procs);
+    try std.testing.expect(s.lookups >= everyone);
+    try std.testing.expectEqual(@as(c_int, 0), system("/bin/" ++ sleeper_cmd ++ " & " ++ let_it_start));
+    defer _ = system(kill_sleeper);
+    const before = s.lookups;
+    s.sample(2);
+    try std.testing.expect(s.lookups - before < everyone / 4);
+    try std.testing.expect(s.lookups - before >= 1);
+    const me = s.find(@intCast(std.c.getpid())) orelse return error.NoSelf;
+    try std.testing.expectEqualStrings("test", me.name);
+    const sleeper = procNamed(&s, "sleep") orelse return error.NoSleeper;
+    try std.testing.expect(sleeper.known);
+    const sleeper_pid = sleeper.pid;
+    try std.testing.expectEqual(@as(c_int, 0), system(kill_sleeper ++ "; " ++ let_it_start));
+    s.sample(4);
+    try std.testing.expect(s.find(sleeper_pid) == null);
+    try std.testing.expectEqual(s.procs.items.len, s.cache.count());
+}
+
+test "a process that replaces itself with another program shows the new name" {
+    const t = try Tmp.make();
+    defer t.remove();
+    const sleeper_cmd = "sleep 44.5";
+    try t.sh("/bin/sh -c 'exec 1>/dev/null; /bin/sleep 0.8; exec /bin/" ++ sleeper_cmd ++ "' & echo $! > pid", .{});
+    defer _ = system("/usr/bin/pkill -f '" ++ sleeper_cmd ++ "'");
+    var pb: [128]u8 = undefined;
+    const pid: i32 = @intCast(try shellNumber("cat '{s}'", .{try t.sub(&pb, "pid")}));
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    s.sample(0);
+    const shell = (s.find(pid) orelse return error.NoShell).name;
+    try std.testing.expect(!std.mem.eql(u8, shell, "sleep"));
+    _ = system("/bin/sleep 1.2");
+    s.sample(2);
+    try std.testing.expectEqualStrings("sleep", (s.find(pid) orelse return error.NoSleeper).name);
+}
+
+test "with no frames, as when the window is hidden, history still records every 10 seconds" {
+    const every = 10.0;
+    const shown_every = @import("app.zig").interval;
+    const start = 100.0;
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.heartbeat(start);
+    try std.testing.expectEqual(@as(usize, 1), a.sampler.samples);
+    a.heartbeat(start + every / 2);
+    try std.testing.expectEqual(@as(usize, 1), a.sampler.samples);
+    const second = start + every;
+    a.heartbeat(second);
+    try std.testing.expectEqual(@as(usize, 2), a.sampler.samples);
+    const third = second + every;
+    a.heartbeat(third);
+    try std.testing.expectEqual(@as(usize, 3), a.sampler.samples);
+    try std.testing.expectEqual(@as(usize, 2), a.metrics.history.len);
+    _ = a.tick(third + shown_every / 2);
+    try std.testing.expectEqual(@as(usize, 3), a.sampler.samples);
+    _ = a.tick(third + shown_every);
+    try std.testing.expectEqual(@as(usize, 4), a.sampler.samples);
+    a.heartbeat(third + shown_every + every / 2);
+    try std.testing.expectEqual(@as(usize, 4), a.sampler.samples);
+}
+
 test "every page draws from this Mac's samples" {
     var a: App = .init(gpa, "/nonexistent-home", "", &.{});
     defer a.deinit();
@@ -708,14 +1412,15 @@ test "every page draws from this Mac's samples" {
     a.cleaner.sync = true;
     a.machine.read();
     a.inventory.loaded = true;
-    for (0..6) |i| {
+    const samples = 6;
+    for (0..samples) |i| {
         const tm: f64 = @floatFromInt(i * 2);
         a.sampler.sample(tm);
         a.metrics.sample(tm, a.sampler.system.power);
     }
-    a.last = 1e9;
-    a.everyone.build(a.sampler.procs.items, .{ .show = .all, .uid = a.sampler.uid }, &a.expanded_groups) catch {};
-    try std.testing.expectEqual(@as(usize, 5), a.metrics.history.len);
+    a.last = sampled_far_ahead;
+    try a.everyone.build(a.sampler.procs.items, .{ .show = .all, .uid = a.sampler.uid }, &a.expanded_groups);
+    try std.testing.expectEqual(@as(usize, samples - 1), a.metrics.history.len);
     var idx: [10]u32 = undefined;
     const n = view_card.top(&a, .memory, &idx);
     try std.testing.expect(n > 0);
@@ -723,10 +1428,12 @@ test "every page draws from this Mac's samples" {
     var tester: ui.Tester = undefined;
     try tester.init(gpa, .init(&a, view), .{});
     defer tester.deinit();
-    tester.resize(1240, 820);
+    tester.resize(wide_w, wide_h);
     const Want = struct { page: @import("app.zig").Page, text: []const u8 };
     const pages = [_]Want{
         .{ .page = .overview, .text = "Memory by Type" },
+        .{ .page = .processes, .text = "Force Quit" },
+        .{ .page = .apps, .text = "Apps" },
         .{ .page = .cpu, .text = "Processor Load" },
         .{ .page = .memory, .text = "Swap" },
         .{ .page = .gpu, .text = "Engines" },
@@ -765,12 +1472,12 @@ test "the cleanup page shows a scan as it runs and what it found" {
     a.inventory.loaded = true;
     a.machine.read();
     a.sampler.sample(0);
-    a.last = 1e9;
+    a.last = sampled_far_ahead;
     a.page = .cleanup;
     var tester: ui.Tester = undefined;
     try tester.init(gpa, .init(&a, view), .{});
     defer tester.deinit();
-    tester.resize(1240, 820);
+    tester.resize(wide_w, wide_h);
     tester.settle(1);
     try std.testing.expect(tester.hasText("Scan to see what can be cleaned."));
     try shotTo(&tester, "cleanup-idle");
@@ -792,11 +1499,159 @@ fn shotTo(tester: *ui.Tester, name: []const u8) !void {
     try tester.screenshot(try std.fmt.bufPrint(&pb, "{s}/{s}.png", .{ std.mem.span(dir), name }));
 }
 
-test {
-    _ = walk;
-    _ = cleaner;
-    _ = procs;
-    _ = groups;
-    _ = worktree;
-    _ = apps;
+const odd_plist =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    \\<plist version="1.0">
+    \\<dict>
+    \\  <key>CFBundleDocumentTypes</key>
+    \\  <array><dict><key>CFBundleName</key><string>Nested Wrong</string></dict></array>
+    \\  <key>CFBundleName</key>
+    \\  <string>Café &amp; Tööls ✓</string>
+    \\  <key>CFBundleVersion</key>
+    \\  <integer>7</integer>
+    \\  <key>CFBundleIdentifier</key>
+    \\  <string/>
+    \\  <key>CFBundleShortVersionString</key>
+    \\  <string>&lt;13&gt; &#65;&#x42;</string>
+    \\</dict>
+    \\</plist>
+;
+
+const second_plist =
+    \\<?xml version="1.0" encoding="UTF-8"?>
+    \\<plist version="1.0"><dict>
+    \\<key>CFBundleName</key><string>
+++ second_name ++
+    \\</string>
+    \\<key>CFBundleExecutable</key><string>fake</string>
+    \\<key>CFBundleIdentifier</key><string>dev.nanokeep.second</string>
+    \\</dict></plist>
+;
+
+test "hovering rebuilds no table, and each change to what a table shows rebuilds it" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist", .{plist});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.clock = fakeClock;
+    a.inventory.sync = true;
+    a.machine.read();
+    a.inventory.load();
+    a.sampler.sample(0);
+    a.last = sampled_far_ahead;
+    a.page = .processes;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(wide_w, wide_h);
+    tester.settle(1);
+
+    const still = a.rebuilds;
+    const hover_steps = 40;
+    const table_top = 150;
+    const step = 12;
+    for (0..hover_steps) |i| tester.moveTo(wide_w / 2, table_top + @as(f32, @floatFromInt(i)) * step);
+    try std.testing.expectEqual(still, a.rebuilds);
+
+    a.query.set("zz-no-such-process");
+    tester.frame();
+    try std.testing.expectEqual(@as(usize, 0), a.table.rows.items.len);
+    a.query.clear();
+    tester.frame();
+    try std.testing.expect(a.table.rows.items.len > 0);
+
+    const mine = a.table.rows.items.len;
+    a.show = @intFromEnum(groups.Show.all);
+    tester.frame();
+    const everyone = a.table.rows.items.len;
+    try std.testing.expect(everyone > mine);
+    a.sortBy(.name);
+    tester.frame();
+    const first = a.table.groups.items[a.table.rows.items[0].group].name;
+    for (a.table.rows.items[1..]) |r| try std.testing.expect(std.ascii.orderIgnoreCase(first, a.table.groups.items[r.group].name) != .gt);
+    a.sortBy(.name);
+    tester.frame();
+    const last = a.table.groups.items[a.table.rows.items[0].group].name;
+    for (a.table.rows.items[1..]) |r| try std.testing.expect(std.ascii.orderIgnoreCase(last, a.table.groups.items[r.group].name) != .lt);
+    for (a.table.groups.items) |g| if (g.count > 1) {
+        a.toggleGroup(g.key);
+        break;
+    };
+    tester.frame();
+    try std.testing.expect(a.table.rows.items.len > everyone);
+
+    const before = a.rebuilds;
+    a.last = @import("app.zig").never_sampled;
+    tester.frame();
+    try std.testing.expect(a.sampler.samples == 2 and a.rebuilds > before);
+
+    a.page = .apps;
+    tester.settle(1);
+    try std.testing.expect(tester.hasText(fake_name));
+    a.app_query.set("Second");
+    tester.settle(1);
+    try std.testing.expectEqual(@as(usize, 0), a.app_rows.items.len);
+    try t.sh("rm -rf Apps/Fake.app && mkdir -p Apps/Second.app/Contents/MacOS && cp /usr/bin/true Apps/Second.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Second.app/Contents/Info.plist", .{second_plist});
+    a.inventory.load();
+    tester.settle(1);
+    try std.testing.expect(tester.hasText(second_name));
+    try std.testing.expect(!tester.hasText(fake_name));
+}
+
+test "the bench reads this process's physical footprint and its peak since a reset" {
+    const before = measure.footprint();
+    try std.testing.expect(before.now > 1 << 20);
+    try std.testing.expect(before.peak >= before.now);
+    measure.resetPeak();
+    const block = try std.heap.page_allocator.alloc(u8, 32 << 20);
+    @memset(block, 0xa5);
+    std.heap.page_allocator.free(block);
+    const after = measure.footprint();
+    try std.testing.expect(after.interval_peak >= before.now + (30 << 20));
+    try std.testing.expect(after.now < after.interval_peak);
+}
+
+test "the bench reports nearest-rank p50 and p95 of its timings" {
+    var hundred: [100]f64 = undefined;
+    for (&hundred, 0..) |*v, i| v.* = @floatFromInt(100 - i);
+    const s = measure.Stats.of(&hundred);
+    try std.testing.expectEqual(@as(f64, 50), s.p50);
+    try std.testing.expectEqual(@as(f64, 95), s.p95);
+    var few = [_]f64{ 9, 1, 5 };
+    try std.testing.expectEqual(@as(f64, 5), measure.Stats.of(&few).p50);
+    try std.testing.expectEqual(@as(f64, 9), measure.Stats.of(&few).p95);
+    var one = [_]f64{7};
+    try std.testing.expectEqual(@as(f64, 7), measure.Stats.of(&one).p95);
+}
+
+test "a bench value over its budget fails, at its budget passes, and without a budget fails" {
+    const table = [_]measure.Budget{
+        .{ .name = "idle_mb", .budget = 140, .target = 40 },
+        .{ .name = "scan_ms", .budget = 900, .target = 36 },
+    };
+    try std.testing.expect(!measure.judge(.{ .name = "idle_mb", .value = 140.5 }, &table).ok());
+    try std.testing.expect(measure.judge(.{ .name = "idle_mb", .value = 140 }, &table).ok());
+    try std.testing.expect(measure.judge(.{ .name = "scan_ms", .value = 12 }, &table).ok());
+    const unknown = measure.judge(.{ .name = "hover_p95_ms", .value = 0 }, &table);
+    try std.testing.expect(!unknown.ok());
+    try std.testing.expectEqual(@as(?measure.Budget, null), unknown.budget);
+}
+
+test "the bench reads the leak count from the leaks tool's summary" {
+    const found =
+        \\Process 18802 is not debuggable. Due to security restrictions, leaks can only show or save contents of readonly memory of restricted processes.
+        \\Process:         DockHelper [18802]
+        \\Process 18802: 48473 nodes malloced for 15932 KB
+        \\Process 18802: 3 leaks for 208 total leaked bytes.
+        \\
+    ;
+    try std.testing.expectEqual(@as(?u64, 3), measure.parseLeaks(found));
+    try std.testing.expectEqual(@as(?u64, 0), measure.parseLeaks("Process 7: 0 leaks for 0 total leaked bytes.\n"));
+    try std.testing.expectEqual(@as(?u64, 1), measure.parseLeaks("Process 7: 1 leak for 16 total leaked bytes.\n"));
+    try std.testing.expectEqual(@as(?u64, null), measure.parseLeaks("leaks[9]: [fatal] unable to read input graph: task_for_pid failed\n"));
 }

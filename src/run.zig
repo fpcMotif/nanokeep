@@ -12,6 +12,9 @@ extern "c" fn posix_spawn_file_actions_addclose(a: *?*anyopaque, fd: c_int) c_in
 extern "c" fn posix_spawn_file_actions_addopen(a: *?*anyopaque, fd: c_int, path: [*:0]const u8, oflag: c_int, mode: c_uint) c_int;
 
 const O_WRONLY = 0x1;
+const STDOUT_FILENO = 1;
+const STDERR_FILENO = 2;
+const read_chunk = 16 * 1024;
 
 pub const Output = struct {
     out: []u8,
@@ -36,9 +39,9 @@ pub fn capture(gpa: std.mem.Allocator, argv: []const []const u8) !Output {
     var fa: ?*anyopaque = null;
     _ = posix_spawn_file_actions_init(&fa);
     defer _ = posix_spawn_file_actions_destroy(&fa);
-    _ = posix_spawn_file_actions_adddup2(&fa, fds[1], 1);
+    _ = posix_spawn_file_actions_adddup2(&fa, fds[1], STDOUT_FILENO);
     _ = posix_spawn_file_actions_addclose(&fa, fds[0]);
-    _ = posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+    _ = posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
     const envp = [_:null]?[*:0]const u8{ "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin" };
     var pid: c_int = 0;
     const rc = posix_spawn(&pid, cargv[0].?, @ptrCast(&fa), null, cargv.ptr, &envp);
@@ -49,7 +52,7 @@ pub fn capture(gpa: std.mem.Allocator, argv: []const []const u8) !Output {
     }
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
-    var buf: [16 * 1024]u8 = undefined;
+    var buf: [read_chunk]u8 = undefined;
     while (true) {
         const n = read(fds[0], &buf, buf.len);
         if (n <= 0) break;
@@ -58,5 +61,5 @@ pub fn capture(gpa: std.mem.Allocator, argv: []const []const u8) !Output {
     _ = close(fds[0]);
     var status: c_int = 0;
     _ = waitpid(pid, &status, 0);
-    return .{ .out = try out.toOwnedSlice(gpa), .code = @truncate(@as(u32, @bitCast(status)) >> 8) };
+    return .{ .out = try out.toOwnedSlice(gpa), .code = std.c.W.EXITSTATUS(@bitCast(status)) };
 }

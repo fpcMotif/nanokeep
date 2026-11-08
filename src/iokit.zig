@@ -6,6 +6,7 @@ const CFRef = *anyopaque;
 const CFIndex = isize;
 
 extern "c" fn CFRelease(ref: CFRef) void;
+extern "c" fn CFRetain(ref: CFRef) CFRef;
 extern "c" fn CFGetTypeID(ref: CFRef) usize;
 extern "c" fn CFNumberGetTypeID() usize;
 extern "c" fn CFStringGetTypeID() usize;
@@ -178,13 +179,55 @@ pub const Temps = struct {
     found: bool = false,
 };
 
+const Sensor = struct { service: CFRef, cpu: bool };
+
 pub const Thermometer = struct {
     client: ?CFRef = null,
     tried: bool = false,
+    sensors: [64]Sensor = undefined,
+    count: usize = 0,
+    started: bool = false,
+    thread: ?std.Thread = null,
+    latest: std.atomic.Value(u64) = .init(0),
+    stop: std.atomic.Value(bool) = .init(false),
+    mutex: std.c.pthread_mutex_t = std.c.PTHREAD_MUTEX_INITIALIZER,
+    cond: std.c.pthread_cond_t = std.c.PTHREAD_COND_INITIALIZER,
+
+    const every_seconds = 10;
 
     pub fn deinit(t: *Thermometer) void {
+        if (t.thread) |th| {
+            _ = std.c.pthread_mutex_lock(&t.mutex);
+            t.stop.store(true, .release);
+            _ = std.c.pthread_cond_signal(&t.cond);
+            _ = std.c.pthread_mutex_unlock(&t.mutex);
+            th.join();
+            t.thread = null;
+        }
+        for (t.sensors[0..t.count]) |s| CFRelease(s.service);
+        t.count = 0;
         if (t.client) |c| CFRelease(c);
         t.client = null;
+    }
+
+    fn find(t: *Thermometer, client: CFRef) void {
+        const services = IOHIDEventSystemClientCopyServices(client) orelse return;
+        defer CFRelease(services);
+        const key = str("Product");
+        defer CFRelease(key);
+        const n = CFArrayGetCount(services);
+        var i: CFIndex = 0;
+        while (i < n and t.count < t.sensors.len) : (i += 1) {
+            const svc = CFArrayGetValueAtIndex(services, i) orelse continue;
+            const name_ref = IOHIDServiceClientCopyProperty(svc, key) orelse continue;
+            defer CFRelease(name_ref);
+            var nb: [64]u8 = undefined;
+            const name = text(name_ref, &nb);
+            const cpu = std.mem.startsWith(u8, name, "PMU tdie") or std.mem.startsWith(u8, name, "pACC") or std.mem.startsWith(u8, name, "eACC");
+            if (!cpu and std.mem.indexOf(u8, name, "NAND") == null) continue;
+            t.sensors[t.count] = .{ .service = CFRetain(svc), .cpu = cpu };
+            t.count += 1;
+        }
     }
 
     fn open(t: *Thermometer) ?CFRef {
@@ -207,35 +250,62 @@ pub const Thermometer = struct {
         defer CFRelease(matching);
         _ = IOHIDEventSystemClientSetMatching(client, matching);
         t.client = client;
+        t.find(client);
         return client;
     }
 
     pub fn read(t: *Thermometer) Temps {
+        if (!t.started) {
+            t.started = true;
+            t.thread = std.Thread.spawn(.{}, watch, .{t}) catch null;
+        }
+        return unpack(t.latest.load(.acquire));
+    }
+
+    fn watch(t: *Thermometer) void {
+        while (!t.stop.load(.acquire)) {
+            t.latest.store(pack(t.measure()), .release);
+            var until: std.c.timespec = undefined;
+            _ = std.c.clock_gettime(.REALTIME, &until);
+            until.sec += every_seconds;
+            _ = std.c.pthread_mutex_lock(&t.mutex);
+            if (!t.stop.load(.acquire)) _ = std.c.pthread_cond_timedwait(&t.cond, &t.mutex, &until);
+            _ = std.c.pthread_mutex_unlock(&t.mutex);
+        }
+    }
+
+    fn pack(temps: Temps) u64 {
+        const c: u64 = @intFromFloat(@round(temps.cpu * centi));
+        const m: u64 = @intFromFloat(@round(temps.cpu_max * centi));
+        const s: u64 = @intFromFloat(@round(temps.storage * centi));
+        return c | (m << field_bits) | (s << 2 * field_bits) | (@as(u64, @intFromBool(temps.found)) << 3 * field_bits);
+    }
+
+    fn unpack(v: u64) Temps {
+        const part = struct {
+            fn f(x: u64, shift: u6) f32 {
+                return @as(f32, @floatFromInt(@as(u16, @truncate(x >> shift)))) / centi;
+            }
+        }.f;
+        return .{ .cpu = part(v, 0), .cpu_max = part(v, field_bits), .storage = part(v, 2 * field_bits), .found = (v >> 3 * field_bits) & 1 != 0 };
+    }
+
+    const centi = 100;
+    const field_bits = 16;
+
+    fn measure(t: *Thermometer) Temps {
         var out: Temps = .{};
-        const client = t.open() orelse return out;
-        const services = IOHIDEventSystemClientCopyServices(client) orelse return out;
-        defer CFRelease(services);
-        const key = str("Product");
-        defer CFRelease(key);
+        _ = t.open() orelse return out;
         var cpu_sum: f64 = 0;
         var cpu_n: usize = 0;
         var nand_sum: f64 = 0;
         var nand_n: usize = 0;
-        const n = CFArrayGetCount(services);
-        var i: CFIndex = 0;
-        while (i < n) : (i += 1) {
-            const svc = CFArrayGetValueAtIndex(services, i) orelse continue;
-            const name_ref = IOHIDServiceClientCopyProperty(svc, key) orelse continue;
-            defer CFRelease(name_ref);
-            var nb: [64]u8 = undefined;
-            const name = text(name_ref, &nb);
-            const cpu = std.mem.startsWith(u8, name, "PMU tdie") or std.mem.startsWith(u8, name, "pACC") or std.mem.startsWith(u8, name, "eACC");
-            const nand = std.mem.indexOf(u8, name, "NAND") != null;
-            if (!cpu and !nand) continue;
-            const ev = IOHIDServiceClientCopyEvent(svc, hid_temperature, 0, 0) orelse continue;
+        for (t.sensors[0..t.count]) |s| {
+            const cpu = s.cpu;
+            const ev = IOHIDServiceClientCopyEvent(s.service, hid_temperature, 0, 0) orelse continue;
             defer CFRelease(ev);
             const v = IOHIDEventGetFloatValue(ev, @intCast(hid_temperature << 16));
-            if (v <= 0 or v > 150) continue;
+            if (!(v > 0 and v <= 150)) continue;
             if (cpu) {
                 cpu_sum += v;
                 cpu_n += 1;

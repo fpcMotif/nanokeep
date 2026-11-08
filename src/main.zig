@@ -1,12 +1,46 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
-const App = @import("app.zig").App;
+const app_mod = @import("app.zig");
+const App = app_mod.App;
 
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 extern "c" fn clock_gettime_nsec_np(clock: c_int) u64;
 
-fn seconds() f64 {
-    return @as(f64, @floatFromInt(clock_gettime_nsec_np(4))) / 1e9;
+const CLOCK_MONOTONIC_RAW = 4;
+
+pub fn seconds() f64 {
+    return @as(f64, @floatFromInt(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW))) / std.time.ns_per_s;
+}
+
+pub fn start(a: *App, app: *nanoui.App) !*nanoui.Window {
+    a.listen();
+    a.clock = seconds;
+    a.machine.read();
+    a.machine.lookUpName();
+    a.usage.load();
+    nanoui.objc.dispatchMain(a, loadApps);
+    nanoui.objc.dispatchMain(a, heartbeat);
+    const w = try app.newWindow(.{
+        .title = "nanokeep",
+        .width = app_mod.window_w,
+        .height = app_mod.window_h,
+        .min_width = app_mod.min_window_w,
+        .min_height = app_mod.min_window_h,
+        .content = .{ .view = .init(a, @import("view.zig").view) },
+    });
+    a.window = w;
+    return w;
+}
+
+fn loadApps(ctx: ?*anyopaque) callconv(.c) void {
+    const a: *App = @ptrCast(@alignCast(ctx));
+    a.inventory.load();
+}
+
+fn heartbeat(ctx: ?*anyopaque) callconv(.c) void {
+    const a: *App = @ptrCast(@alignCast(ctx));
+    a.heartbeat(seconds());
+    nanoui.objc.dispatchAfter(@as(u64, @intFromFloat(app_mod.hidden_interval)) * std.time.ns_per_s, a, heartbeat);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -19,19 +53,6 @@ pub fn main(init: std.process.Init) !void {
     defer app.destroy();
     var a: App = .init(init.gpa, home, tmpdir, &app_dirs);
     defer a.deinit();
-    a.listen();
-    a.clock = seconds;
-    a.machine.read();
-    a.machine.lookUpName();
-    a.inventory.load();
-    a.orderApps();
-    a.window = try app.newWindow(.{
-        .title = "nanokeep",
-        .width = 1100,
-        .height = 720,
-        .min_width = 860,
-        .min_height = 520,
-        .content = .{ .view = .init(&a, @import("view.zig").view) },
-    });
+    _ = try start(&a, app);
     try app.run();
 }

@@ -1,7 +1,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const metrics = @import("metrics.zig");
 const procs = @import("procs.zig");
 const card = @import("view_card.zig");
 const view = @import("view.zig");
@@ -22,6 +21,20 @@ pub fn symbolFor(name: []const u8) []const u8 {
     return "desktopcomputer";
 }
 
+fn installed(c: *ui.Context, bytes: u64) []const u8 {
+    return c.print("{d} GB", .{(bytes + (1 << 29)) >> 30});
+}
+
+fn chip(c: *ui.Context, icon: []const u8, title: []const u8, detail: []const u8) void {
+    const th = c.theme;
+    ui.key(c, title);
+    const d = ui.div(c).row().px(10).h(26).gap(6).itemsCenter().roundedFull().bg(th.text.alpha(0.05));
+    defer d.end();
+    ui.icon(c, icon, .{ .size = 11, .color = th.muted });
+    ui.text(c, title, .{ .size = 12, .weight = .semibold });
+    ui.text(c, detail, .{ .size = 12, .color = th.muted });
+}
+
 pub fn page(c: *ui.Context, a: *App) void {
     const mc = &a.machine;
     const th = c.theme;
@@ -34,21 +47,21 @@ pub fn page(c: *ui.Context, a: *App) void {
     const body = ui.div(c).column().wFull().grow().scrollY().px(20).pb(20).gap(14);
     defer body.end();
     {
-        const hero = ui.div(c).row().wFull().px(28).py(26).gap(26).itemsCenter().rounded(14).bg(th.surface);
+        const hero = ui.div(c).row().wFull().px(28).py(24).gap(24).itemsCenter().rounded(card.radius).bg(th.surface).shadow(card.lift);
         defer hero.end();
         {
-            const pic = ui.div(c).row().w(96).h(72).center();
+            const pic = ui.div(c).row().w(104).h(104).center().rounded(24).bg(th.text.alpha(0.045));
             defer pic.end();
-            ui.icon(c, symbolFor(mc.name.get()), .{ .size = 64, .color = th.muted });
+            ui.icon(c, symbolFor(mc.name.get()), .{ .size = 54, .color = th.text.alpha(0.78) });
         }
-        const t = ui.div(c).column().gap(6);
+        const t = ui.div(c).column().gap(4);
         defer t.end();
-        ui.text(c, mc.name.get(), .{ .size = 24, .weight = .bold });
-        ui.text(c, c.print("{s} · {s}", .{ mc.chip.get(), view.size(c, mc.memory) }), .{ .size = 13, .color = th.muted });
-        const tags = ui.div(c).row().gap(8).pt(4);
-        defer tags.end();
-        card.tag(c, c.print("macOS {s} ({s})", .{ mc.os.get(), mc.build.get() }), .hex(card.cpu_tint));
-        card.tag(c, c.print("Up {s}", .{up}), .hex(card.memory_tint));
+        ui.text(c, mc.name.get(), .{ .size = 26, .weight = .bold });
+        ui.text(c, c.print("{s} · {s} · {d}-core CPU · {d}-core GPU", .{ mc.chip.get(), installed(c, mc.memory), mc.cores, mc.gpu_cores }), .{ .size = 13.5, .color = th.muted });
+        const chips = ui.div(c).row().gap(8).pt(10);
+        defer chips.end();
+        chip(c, "apple.logo", c.print("macOS {s}", .{mc.os.get()}), c.print("{s}", .{mc.build.get()}));
+        chip(c, "clock", "Up", up);
     }
     {
         const r = card.pair(c);
@@ -65,7 +78,7 @@ pub fn page(c: *ui.Context, a: *App) void {
             card.kv(c, "Chip", mc.chip.get());
             card.kv(c, "CPU cores", if (mc.performance > 0) c.print("{d} ({d} Performance, {d} Efficiency)", .{ mc.cores, mc.performance, mc.efficiency }) else c.print("{d}", .{mc.cores}));
             card.kv(c, "GPU cores", c.print("{d}", .{mc.gpu_cores}));
-            card.kv(c, "Memory", view.size(c, mc.memory));
+            card.kv(c, "Memory", installed(c, mc.memory));
             card.kv(c, "Architecture", if (mc.arm) "Apple silicon" else "Intel");
             serial(c, a);
         }

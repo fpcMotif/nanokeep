@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Palindrome for macOS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --desk-a: #C7A4E8; --desk-b: #F1D3AE; --desk-c: #CFE6B0;
+  --win: #FFFFFF; --win-2: #F6F5F8; --side: rgb(244 241 248 / .72); --bar: rgb(255 255 255 / .8);
+  --label: rgb(0 0 0 / .86); --label-2: rgb(0 0 0 / .52); --label-3: rgb(0 0 0 / .28);
+  --sep: rgb(0 0 0 / .09); --fill: rgb(0 0 0 / .05); --fill-2: rgb(0 0 0 / .08); --alt: rgb(0 0 0 / .022);
+  --glass: rgb(255 255 255 / .62); --glass-edge: rgb(255 255 255 / .9);
+  --accent: #9536D6; --accent-soft: rgb(149 54 214 / .12); --on-accent: #fff;
+  --cpu: #9536D6; --mem: #C9853A; --up: #5E9A2C; --down: #C9853A; --red: #FF3B30; --yellow: #F5A623;
+  --mem-soft: rgb(201 133 58 / .16); --up-soft: rgb(94 154 44 / .14);
+  --shadow: 0 0 0 .5px rgb(0 0 0 / .18), 0 24px 70px -18px rgb(40 10 60 / .45), 0 8px 20px -10px rgb(0 0 0 / .25);
+  --sys: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --display: "SF Pro Display", -apple-system, "Inter", system-ui, sans-serif;
+  --rounded: ui-rounded, "SF Pro Rounded", -apple-system, "Inter", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --desk-a: #3A1757; --desk-b: #4A3420; --desk-c: #24361A;
+    --win: #1E1C21; --win-2: #252229; --side: rgb(42 37 48 / .62); --bar: rgb(30 28 33 / .78);
+    --label: rgb(255 255 255 / .88); --label-2: rgb(255 255 255 / .55); --label-3: rgb(255 255 255 / .26);
+    --sep: rgb(255 255 255 / .09); --fill: rgb(255 255 255 / .06); --fill-2: rgb(255 255 255 / .1); --alt: rgb(255 255 255 / .025);
+    --glass: rgb(60 54 66 / .5); --glass-edge: rgb(255 255 255 / .14);
+    --accent: #B66BF0; --accent-soft: rgb(182 107 240 / .18); --on-accent: #1A0B26;
+    --cpu: #B66BF0; --mem: #EABD86; --up: #ABD86F; --down: #EABD86; --red: #FF453A; --yellow: #FFD60A;
+    --mem-soft: rgb(234 189 134 / .16); --up-soft: rgb(171 216 111 / .14);
+    --shadow: 0 0 0 .5px rgb(255 255 255 / .12), 0 0 0 1px rgb(0 0 0 / .6), 0 30px 80px -20px rgb(0 0 0 / .7);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --desk-a: #3A1757; --desk-b: #4A3420; --desk-c: #24361A;
+  --win: #1E1C21; --win-2: #252229; --side: rgb(42 37 48 / .62); --bar: rgb(30 28 33 / .78);
+  --label: rgb(255 255 255 / .88); --label-2: rgb(255 255 255 / .55); --label-3: rgb(255 255 255 / .26);
+  --sep: rgb(255 255 255 / .09); --fill: rgb(255 255 255 / .06); --fill-2: rgb(255 255 255 / .1); --alt: rgb(255 255 255 / .025);
+  --glass: rgb(60 54 66 / .5); --glass-edge: rgb(255 255 255 / .14);
+  --accent: #B66BF0; --accent-soft: rgb(182 107 240 / .18); --on-accent: #1A0B26;
+  --cpu: #B66BF0; --mem: #EABD86; --up: #ABD86F; --down: #EABD86; --red: #FF453A; --yellow: #FFD60A;
+  --mem-soft: rgb(234 189 134 / .16); --up-soft: rgb(171 216 111 / .14);
+  --shadow: 0 0 0 .5px rgb(255 255 255 / .12), 0 0 0 1px rgb(0 0 0 / .6), 0 30px 80px -20px rgb(0 0 0 / .7);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--win-2); color: var(--label); font: 400 13px/1.45 var(--sys); -webkit-font-smoothing: antialiased; letter-spacing: -.003em; }
+.num { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: .92em; }
+.l2 { color: var(--label-2); } .l3 { color: var(--label-3); }
+
+/* doc page */
+.page { max-width: 1260px; margin: 0 auto; padding: 72px 16px 120px; }
+.eyebrow { font: 600 12px var(--sys); color: var(--accent); letter-spacing: .01em; }
+.hero h1 { font: 700 clamp(44px, 7vw, 80px)/1.02 var(--display); letter-spacing: -.035em; margin: 10px 0 18px; }
+.hero h1 span { background: linear-gradient(100deg, var(--cpu) 10%, var(--mem) 60%, var(--up)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero p { font-size: 19px; line-height: 1.45; color: var(--label-2); max-width: 46ch; letter-spacing: -.01em; }
+.toggle { position: fixed; top: 14px; right: 14px; z-index: 9; font: 500 12px var(--sys); color: var(--label); background: var(--glass); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); border: .5px solid var(--sep); box-shadow: inset 0 .5px 0 var(--glass-edge), 0 4px 14px rgb(0 0 0 / .12); border-radius: 99px; padding: 6px 14px; cursor: pointer; }
+section { margin-top: 96px; }
+section > header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 32px; align-items: end; margin-bottom: 24px; }
+section h2 { font: 700 34px/1.1 var(--display); letter-spacing: -.025em; }
+section header p { color: var(--label-2); font-size: 15px; max-width: 58ch; }
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.tile { background: var(--win); border-radius: 18px; padding: 20px; box-shadow: 0 0 0 .5px var(--sep), 0 1px 2px rgb(0 0 0 / .04); }
+.tile h3 { font: 600 15px var(--sys); margin: 14px 0 4px; letter-spacing: -.01em; }
+.tile p { color: var(--label-2); font-size: 13px; }
+.sw { height: 64px; border-radius: 12px; box-shadow: inset 0 0 0 .5px var(--sep); }
+.sw-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
+.sw-row b { display: block; font-weight: 600; margin-top: 8px; }
+.sw-row span { font: 11px var(--mono); color: var(--label-2); }
+.breaks { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.break { position: relative; overflow: hidden; border-radius: 22px; padding: 28px; background: var(--win); box-shadow: 0 0 0 .5px var(--sep); min-height: 260px; }
+.break .tag { font: 600 11px var(--sys); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); }
+.break h3 { font: 700 24px/1.15 var(--display); letter-spacing: -.02em; margin: 8px 0 8px; max-width: 18ch; }
+.break p { color: var(--label-2); max-width: 46ch; }
+.type-row { display: grid; grid-template-columns: 170px 1fr 160px; gap: 16px; align-items: baseline; padding: 12px 0; border-bottom: .5px solid var(--sep); }
+
+/* desktop + window */
+.desk { position: relative; overflow-x: auto; overflow-y: hidden; border-radius: 22px; padding: 44px 40px;
+  background: radial-gradient(60% 80% at 10% 10%, var(--desk-a), transparent 70%), radial-gradient(60% 70% at 95% 20%, var(--desk-b), transparent 70%), radial-gradient(70% 80% at 60% 110%, var(--desk-c), transparent 70%), var(--win-2); }
+.desk.tall { padding-top: 64px; }
+.win { position: relative; width: 1180px; height: 740px; margin: 0 auto; background: var(--win); border-radius: 16px; box-shadow: var(--shadow); display: grid; grid-template-columns: 228px 1fr; overflow: hidden; }
+.side { margin: 8px 0 8px 8px; border-radius: 12px; background: var(--side); backdrop-filter: blur(40px) saturate(1.8); -webkit-backdrop-filter: blur(40px) saturate(1.8); box-shadow: inset 0 0 0 .5px var(--sep), inset 0 .5px 0 var(--glass-edge); padding: 14px 10px 12px; display: flex; flex-direction: column; gap: 1px; position: relative; overflow: hidden; }
+.side::before { content: ""; position: absolute; inset: -40%; background: radial-gradient(40% 30% at 20% 10%, var(--desk-a), transparent), radial-gradient(40% 30% at 80% 90%, var(--desk-c), transparent); opacity: .35; z-index: -1; }
+.lights { display: flex; gap: 8px; padding: 0 6px 20px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 .5px rgb(0 0 0 / .14); }
+.lights i:nth-child(1) { background: #FF5F57; } .lights i:nth-child(2) { background: #FEBC2E; } .lights i:nth-child(3) { background: #28C840; }
+.sh { font: 600 11px var(--sys); color: var(--label-3); padding: 12px 10px 4px; }
+.si { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: center; height: 28px; padding: 0 8px 0 10px; border-radius: 8px; color: var(--label); }
+.si svg { width: 16px; height: 16px; color: var(--accent); }
+.si .num { font-size: 11px; color: var(--label-2); }
+.si.on { background: var(--fill-2); font-weight: 500; }
+.side .foot { margin-top: auto; padding: 10px; border-radius: 10px; background: var(--fill); font-size: 11px; color: var(--label-2); }
+.side .foot b { display: block; color: var(--label); font-size: 12px; font-weight: 600; }
+.main { display: flex; flex-direction: column; min-width: 0; }
+.tb { height: 56px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px; }
+.tb .t b { display: block; font: 700 15px/1.15 var(--sys); letter-spacing: -.01em; }
+.tb .t span { font-size: 11px; color: var(--label-2); }
+.tb .grow { flex: 1; }
+.cap { display: flex; align-items: center; height: 32px; border-radius: 99px; background: var(--glass); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); box-shadow: 0 0 0 .5px var(--sep), inset 0 .5px 0 var(--glass-edge), 0 2px 8px -2px rgb(0 0 0 / .12); padding: 0 4px; gap: 2px; }
+.cap .ib { width: 30px; height: 26px; display: grid; place-items: center; border-radius: 99px; color: var(--label-2); }
+.cap .ib svg { width: 16px; height: 16px; }
+.cap .txt { padding: 0 10px; font-size: 12px; font-weight: 500; color: var(--label); }
+.cap .txt.red { color: var(--red); }
+.search { display: flex; align-items: center; gap: 6px; width: 190px; padding: 0 12px; color: var(--label-3); font-size: 12px; }
+.seg { display: flex; height: 26px; padding: 2px; border-radius: 99px; background: var(--fill); gap: 2px; }
+.seg span { padding: 0 12px; display: grid; place-items: center; font-size: 12px; border-radius: 99px; color: var(--label-2); }
+.seg span.on { background: var(--win); color: var(--label); font-weight: 500; box-shadow: 0 0 0 .5px var(--sep), 0 1px 3px rgb(0 0 0 / .12); }
+.content { flex: 1; min-height: 0; overflow: hidden; padding: 4px 20px 0; display: flex; flex-direction: column; gap: 14px; }
+.statusbar { height: 30px; flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 16px; padding: 0 20px; font-size: 11px; color: var(--label-2); border-top: .5px solid var(--sep); }
+.statusbar i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+
+/* buttons */
+.btn { display: inline-flex; align-items: center; justify-content: center; height: 28px; padding: 0 14px; border-radius: 99px; font: 500 13px var(--sys); color: var(--label); background: var(--fill-2); white-space: nowrap; }
+.btn.pri { background: var(--accent); color: var(--on-accent); box-shadow: inset 0 .5px 0 rgb(255 255 255 / .3), 0 1px 3px rgb(0 0 0 / .15); }
+.btn.green { background: var(--up); color: var(--on-accent); }
+.btn.lg { height: 34px; padding: 0 20px; font-size: 14px; }
+.btn.danger { color: var(--red); }
+.btn.plain { background: transparent; color: var(--accent); padding: 0 6px; }
+
+/* cards: grouped box */
+.box { background: var(--win-2); border-radius: 14px; padding: 14px 16px; box-shadow: inset 0 0 0 .5px var(--sep); min-width: 0; position: relative; }
+.box h4 { display: flex; justify-content: space-between; align-items: center; font: 600 12px var(--sys); color: var(--label-2); margin-bottom: 8px; }
+.hn { font: 600 42px/1 var(--rounded); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.hn small { font: 500 15px var(--sys); color: var(--label-2); margin-left: 3px; letter-spacing: 0; }
+
+/* the spine (break #1) */
+.pair { display: grid; grid-template-columns: 1fr 28px 1fr; }
+.pair > .spine { position: relative; }
+.pair > .spine::before { content: ""; position: absolute; left: 50%; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(transparent, var(--accent) 20%, var(--accent) 80%, transparent); }
+
+/* table */
+.tbl { margin: 0 -20px; flex: 1; min-height: 0; overflow: hidden; }
+.tr { display: grid; align-items: center; height: 26px; padding: 0 20px; font-size: 12.5px; }
+.tr:nth-child(even):not(.th) { background: var(--alt); }
+.th { height: 28px; font-size: 11px; color: var(--label-2); border-bottom: .5px solid var(--sep); font-weight: 500; }
+.th .sort { color: var(--label); font-weight: 600; }
+.tr.sel { background: var(--accent) !important; color: var(--on-accent); border-radius: 6px; margin: 0 10px; padding: 0 10px; }
+.tr.sel .l2, .tr.sel .num { color: inherit; }
+.tr .r { text-align: right; }
+.dis { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dis .chev { width: 10px; color: var(--label-3); font-size: 9px; }
+.dis .ico { width: 16px; height: 16px; border-radius: 4px; flex: none; }
+.dis b { font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { font-size: 10.5px; padding: 0 6px; border-radius: 99px; background: var(--fill-2); color: var(--label-2); font-variant-numeric: tabular-nums; }
+.tr.sel .badge { background: rgb(255 255 255 / .25); color: inherit; }
+/* spine cell: cpu left, mem right */
+.sc { display: grid; grid-template-columns: 40px 1fr 1px 1fr 56px; align-items: center; gap: 6px; height: 100%; }
+.sc .b { height: 6px; display: flex; }
+.sc .b.L { justify-content: flex-end; }
+.sc .b i { height: 100%; display: block; }
+.sc .b.L i { background: var(--cpu); border-radius: 3px 0 0 3px; }
+.sc .b.R i { background: var(--mem); border-radius: 0 3px 3px 0; }
+.sc .ax { height: 100%; background: var(--accent); opacity: .35; }
+.tr.sel .sc .b i { background: var(--on-accent); opacity: .85; }
+.tr.sel .sc .ax { background: var(--on-accent); }
+
+/* lists */
+.row { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 10px; min-height: 38px; padding: 6px 0; border-bottom: .5px solid var(--sep); }
+.row:last-child { border-bottom: 0; }
+.row .sub { display: block; font-size: 11px; color: var(--label-2); }
+.cb { width: 14px; height: 14px; border-radius: 4px; box-shadow: inset 0 0 0 .5px var(--label-3); background: var(--win); display: grid; place-items: center; }
+.cb.on { background: var(--accent); box-shadow: none; }
+.cb.on::after { content: ""; width: 6px; height: 3px; border: solid var(--on-accent); border-width: 0 0 1.6px 1.6px; transform: rotate(-45deg) translate(1px, -1px); }
+.appi { width: 22px; height: 22px; border-radius: 6px; box-shadow: inset 0 0 0 .5px rgb(0 0 0 / .1); }
+
+/* sheet + alert */
+.scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .18); }
+.sheet { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); width: 420px; background: var(--win); border-radius: 16px; box-shadow: 0 0 0 .5px var(--sep), 0 30px 70px -10px rgb(0 0 0 / .45); padding: 24px; display: grid; gap: 14px; justify-items: center; text-align: center; }
+.sheet h5 { font: 700 15px var(--sys); }
+.sheet p { color: var(--label-2); font-size: 12.5px; max-width: 34ch; }
+.sheet .acts { display: grid; gap: 8px; width: 100%; }
+.sheet .acts .btn { width: 100%; }
+.appicon { width: 64px; height: 64px; border-radius: 15px; position: relative; box-shadow: 0 6px 16px -6px rgb(0 0 0 / .4), inset 0 0 0 .5px rgb(255 255 255 / .3); overflow: hidden;
+  background: radial-gradient(80% 80% at 30% 20%, #C98BF5, #7A22BF 70%); }
+.appicon::before, .appicon::after { content: ""; position: absolute; top: 18%; bottom: 18%; width: 22%; border-radius: 4px; }
+.appicon::before { right: 51%; background: linear-gradient(#fff, rgb(255 255 255 / .55)); height: 40%; top: auto; }
+.appicon::after { left: 51%; background: linear-gradient(#F6D3A6, #EABD86); height: 64%; top: auto; }
+.appicon i { position: absolute; left: 50%; top: 12%; bottom: 12%; width: 1.5px; margin-left: -.75px; background: rgb(255 255 255 / .9); border-radius: 1px; }
+
+/* menu bar */
+.mbar { position: absolute; top: 0; left: 0; right: 0; height: 26px; display: flex; align-items: center; gap: 18px; padding: 0 16px; font-size: 13px; background: rgb(255 255 255 / .22); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); color: var(--label); }
+.mbar .sp { flex: 1; }
+.mbar .me { padding: 1px 8px; border-radius: 5px; background: var(--fill-2); font: 500 11.5px var(--sys); display: flex; gap: 6px; align-items: center; }
+.pop { width: 330px; border-radius: 16px; background: var(--side); backdrop-filter: blur(50px) saturate(1.8); -webkit-backdrop-filter: blur(50px) saturate(1.8); box-shadow: 0 0 0 .5px var(--sep), inset 0 .5px 0 var(--glass-edge), 0 24px 60px -10px rgb(0 0 0 / .4); padding: 12px; display: grid; gap: 10px; }
+.pop .box { background: var(--glass); }
+.notif { width: 360px; border-radius: 18px; padding: 12px 14px; display: grid; grid-template-columns: 38px 1fr auto; gap: 12px; align-items: center; background: var(--side); backdrop-filter: blur(50px) saturate(1.8); -webkit-backdrop-filter: blur(50px) saturate(1.8); box-shadow: 0 0 0 .5px var(--sep), inset 0 .5px 0 var(--glass-edge), 0 18px 40px -12px rgb(0 0 0 / .35); }
+.notif .appicon { width: 38px; height: 38px; border-radius: 9px; }
+
+/* settings window */
+.swin { width: 680px; margin: 0 auto; background: var(--win); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+.swin .stb { display: flex; flex-direction: column; align-items: center; padding: 12px 16px 10px; position: relative; }
+.swin .stb .lights { position: absolute; left: 16px; top: 16px; padding: 0; }
+.swin .tabs { display: flex; gap: 4px; margin-top: 26px; }
+.swin .tab { width: 74px; height: 50px; border-radius: 8px; display: grid; justify-items: center; align-content: center; gap: 3px; font-size: 11px; color: var(--label-2); }
+.swin .tab svg { width: 20px; height: 20px; }
+.swin .tab.on { background: var(--fill-2); color: var(--accent); }
+.form { padding: 4px 28px 28px; display: grid; gap: 16px; }
+.fgroup { background: var(--win-2); border-radius: 12px; box-shadow: inset 0 0 0 .5px var(--sep); }
+.frow { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 14px; border-bottom: .5px solid var(--sep); min-height: 40px; }
+.frow:last-child { border-bottom: 0; }
+.frow .sub { display: block; font-size: 11px; color: var(--label-2); }
+.sw-t { width: 32px; height: 19px; border-radius: 99px; background: var(--fill-2); position: relative; flex: none; }
+.sw-t::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .3); }
+.sw-t.on { background: var(--accent); }
+.sw-t.on::after { left: 15px; }
+.pop-btn { display: inline-flex; gap: 8px; align-items: center; height: 24px; padding: 0 8px 0 10px; border-radius: 6px; background: var(--win); box-shadow: 0 0 0 .5px var(--sep), 0 1px 2px rgb(0 0 0 / .08); font-size: 12.5px; }
+.pop-btn::after { content: "⌃⌄"; font-size: 8px; line-height: 6px; width: 8px; color: var(--label-2); word-break: break-all; }
+
+@keyframes breathe { 50% { opacity: .35; } }
+.pulse { animation: breathe 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+@media (max-width: 760px) { section > header { grid-template-columns: 1fr; gap: 8px; } .desk { padding: 24px 16px; } .type-row { grid-template-columns: 1fr; gap: 4px; } }
+</style>
+</head>
+<body>
+<button class="toggle" id="theme">Appearance</button>
+<div class="page">
+
+<div class="hero">
+  <div class="eyebrow">nanokeep · Design system for macOS</div>
+  <h1>Every number<br>has a <span>partner.</span></h1>
+  <p>Palindrome dresses nanokeep in the clothes of a Mac app: SF Pro, glass sidebars, capsule toolbars, sheets and system colours. It keeps one idea of its own. Paired values meet at a spine.</p>
+</div>
+
+<section>
+  <header><h2>Two rules we break</h2><p>Everything else follows the Human Interface Guidelines. These two breaks give nanokeep its own face. Each one is limited so that it never fights the platform.</p></header>
+  <div class="breaks">
+    <div class="break">
+      <div class="tag">Break one</div><h3>The spine runs through the data.</h3>
+      <p>macOS tables keep each metric in its own column. nanokeep puts CPU and memory into one cell, and they grow away from a thin accent axis. Only data cells carry the spine. Chrome never does.</p>
+      <svg viewBox="0 0 320 80" width="100%" style="margin-top:22px">
+        <line x1="160" y1="0" x2="160" y2="80" stroke="var(--accent)" stroke-width="1"/>
+        <rect x="70" y="14" width="88" height="7" rx="3.5" fill="var(--cpu)"/><rect x="162" y="14" width="140" height="7" rx="3.5" fill="var(--mem)"/>
+        <rect x="120" y="36" width="38" height="7" rx="3.5" fill="var(--cpu)" opacity=".7"/><rect x="162" y="36" width="70" height="7" rx="3.5" fill="var(--mem)" opacity=".7"/>
+        <rect x="146" y="58" width="12" height="7" rx="3.5" fill="var(--cpu)" opacity=".45"/><rect x="162" y="58" width="40" height="7" rx="3.5" fill="var(--mem)" opacity=".45"/>
+      </svg>
+    </div>
+    <div class="break">
+      <div class="tag">Break two</div><h3>Hero numerals, set in SF Pro Rounded.</h3>
+      <p>Mac apps rarely open a pane with a giant number. nanokeep does, once per pane, in SF Pro Rounded at 42 pt or larger. It is the number you came to read, so it gets the room.</p>
+      <div style="margin-top:22px;display:flex;gap:28px;align-items:baseline"><span class="hn" style="font-size:64px;color:var(--up)">18.4<small>GB</small></span><span class="hn" style="font-size:40px;color:var(--cpu)">33<small>%</small></span></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2>Colour</h2><p>The accent is a deep violet, close to systemPurple. Memory and download use a warm sand. Upload and reclaimed space use a soft lime. Window materials are standard macOS greys, with a faint violet tint in the glass.</p></header>
+  <div class="sw-row" id="sw"></div>
+</section>
+
+<section>
+  <header><h2>Type</h2><p>The system font everywhere. Tabular figures on every number. SF Mono only for paths, ports and PIDs a person might copy.</p></header>
+  <div id="type"></div>
+</section>
+
+<section>
+  <header><h2>Controls</h2><p>Native shapes from macOS Tahoe: capsule toolbar groups, pill segmented controls and full-round buttons. One prominent button per view.</p></header>
+  <div class="grid" id="controls"></div>
+</section>
+
+<div id="screens"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let seed = 9229;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+try { const t = localStorage.getItem("palindrome-mac-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+$("#theme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("palindrome-mac-theme", r.dataset.theme); } catch {}
+};
+
+const IC = {
+  overview: '<rect x="2" y="2" width="5" height="5" rx="1.4"/><rect x="9" y="2" width="5" height="5" rx="1.4"/><rect x="2" y="9" width="5" height="5" rx="1.4"/><rect x="9" y="9" width="5" height="5" rx="1.4"/>',
+  processes: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.6" cy="4" r=".6" fill="currentColor"/><circle cx="2.6" cy="8" r=".6" fill="currentColor"/><circle cx="2.6" cy="12" r=".6" fill="currentColor"/>',
+  network: '<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/>',
+  connections: '<circle cx="4" cy="4" r="2"/><circle cx="12" cy="12" r="2"/><path d="M5.5 5.5l5 5M12 2v4M10 4h4"/>',
+  cleanup: '<path d="M8 1.5l1.3 3.6 3.7 1.3-3.7 1.3L8 11.3 6.7 7.7 3 6.4l3.7-1.3z"/><path d="M12.5 10.5l.6 1.6 1.4.5-1.4.5-.6 1.6-.6-1.6-1.4-.5 1.4-.5z"/>',
+  cpu: '<rect x="4" y="4" width="8" height="8" rx="1.5"/><rect x="6.3" y="6.3" width="3.4" height="3.4" rx=".6"/><path d="M6 2v2M10 2v2M6 12v2M10 12v2M2 6h2M2 10h2M12 6h2M12 10h2"/>',
+  memory: '<rect x="1.5" y="4.5" width="13" height="7" rx="1.5"/><path d="M4.5 7v2M7 7v2M9.5 7v2M12 7v2M4 11.5V13M12 11.5V13"/>',
+  disk: '<rect x="2" y="3.5" width="12" height="9" rx="2"/><path d="M2 9h12"/><circle cx="11.5" cy="11" r=".6" fill="currentColor"/>',
+  energy: '<path d="M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z"/>',
+  search: '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/>',
+  info: '<circle cx="8" cy="8" r="6"/><path d="M8 7v4.5"/><circle cx="8" cy="4.8" r=".6" fill="currentColor"/>',
+  stop: '<circle cx="8" cy="8" r="6"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4"/>',
+  gear: '<circle cx="8" cy="8" r="2.4"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
+  bell: '<path d="M4 11V7a4 4 0 0 1 8 0v4l1.2 1.5H2.8z"/><path d="M6.5 14a1.6 1.6 0 0 0 3 0"/>',
+  shield: '<path d="M8 1.5l5.5 2v4.2c0 3.3-2.4 5.6-5.5 6.8-3.1-1.2-5.5-3.5-5.5-6.8V3.5z"/>',
+  trash: '<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4"/>',
+  folder: '<path d="M1.8 4.5c0-.8.6-1.5 1.4-1.5h3l1.3 1.5h5.3c.8 0 1.4.6 1.4 1.4v5.6c0 .8-.6 1.5-1.4 1.5H3.2c-.8 0-1.4-.7-1.4-1.5z"/>',
+  play: '<path d="M5 3.5v9l7-4.5z"/>',
+};
+const ico = (n, w = 16) => `<svg viewBox="0 0 16 16" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round">${IC[n]}</svg>`;
+
+$("#sw").innerHTML = [["Accent", "--accent", "#9536D6 · #B66BF0"], ["Sand", "--mem", "#C9853A · #EABD86"], ["Lime", "--up", "#5E9A2C · #ABD86F"], ["Red", "--red", "systemRed"], ["Window", "--win", "#FFFFFF · #1E1C21"], ["Grouped", "--win-2", "#F6F5F8 · #252229"], ["Sidebar glass", "--side", "72% · 62% + blur 40"], ["Separator", "--sep", "9% label"]]
+  .map(([n, v, d]) => `<div><div class="sw" style="background:var(${v})"></div><b>${n}</b><span>${d}</span></div>`).join("");
+$("#type").innerHTML = [["Large title", "700 34 / SF Pro Display", "Cleanup", "font:700 34px var(--display);letter-spacing:-.025em"], ["Hero numeral", "600 42+ / SF Pro Rounded", "21.6 GB", "font:600 42px var(--rounded);font-variant-numeric:tabular-nums"], ["Window title", "700 15 / SF Pro", "Processes", "font:700 15px var(--sys)"], ["Body", "400 13 / SF Pro", "Items go to the Trash. Nothing is deleted until you empty it.", ""], ["Table", "400 12.5 / tabular", "canary   3.7   10.9 GB   1,449", "font-size:12.5px;font-variant-numeric:tabular-nums"], ["Caption", "400 11 / secondary", "665 shown in 285 groups", "font-size:11px;color:var(--label-2)"], ["Mono", "SF Mono 11.5", "~/Library/Developer/Xcode/DerivedData", "font:11.5px var(--mono)"]]
+  .map(([n, s, ex, st]) => `<div class="type-row"><b style="font-weight:600">${n}</b><span style="${st}">${ex}</span><span class="l2 mono" style="font-size:11px">${s}</span></div>`).join("");
+
+/* ---------- builders ---------- */
+const NAV = [["Overview", "overview", ""], ["Processes", "processes", "849"], ["Network", "network", "25.6 MB/s"], ["Cleanup", "cleanup", "18.4 GB"], ["—Hardware"], ["CPU", "cpu", "33%"], ["Memory", "memory", "84%"], ["Disk", "disk", "412 GB"], ["Energy", "energy", "6 W"]];
+function win(active, title, sub, tools, body, { status = true, overlay = "" } = {}) {
+  const nav = NAV.map(n => n[0][0] === "—" ? `<div class="sh">${n[0].slice(1)}</div>` : `<div class="si${n[0] === active ? " on" : ""}">${ico(n[1])}<span>${n[0]}</span><span class="num">${n[2]}</span></div>`).join("");
+  return `<div class="win"><aside class="side"><div class="lights"><i></i><i></i><i></i></div>${nav}<div class="foot"><b>MacBook Pro</b>Apple M4 Pro · up 4 h 20 min</div></aside>
+    <div class="main"><div class="tb"><div class="t"><b>${title}</b><span>${sub}</span></div><div class="grow"></div>${tools}</div>
+    <div class="content">${body}</div>
+    ${status ? `<div class="statusbar"><span><i style="background:var(--cpu)"></i>CPU 33.3%</span><span><i style="background:var(--mem)"></i>Memory 21.6 GB</span><span><i style="background:var(--up)"></i>↑ 1.8 MB/s</span><span><i style="background:var(--down)"></i>↓ 25.6 MB/s</span></div>` : ""}</div>${overlay}</div>`;
+}
+const desk = (inner, cls = "") => `<div class="desk ${cls}">${inner}</div>`;
+const screen = (id, name, note, html) => `<section id="${id}"><header><h2>${name}</h2><p>${note}</p></header>${html}</section>`;
+const cap = inner => `<div class="cap">${inner}</div>`;
+const ib = n => `<span class="ib">${ico(n)}</span>`;
+const seg = (opts, on) => `<div class="seg">${opts.map(o => `<span${o === on ? ' class="on"' : ""}>${o}</span>`).join("")}</div>`;
+const gb = g => g >= 1 ? g.toFixed(1) + " GB" : Math.round(g * 1000) + " MB";
+const kb = v => v >= 1000 ? (v / 1000).toFixed(1) + " MB" : v + " KB";
+
+function mirrorChart(w, h, n, ca, cb, sa = .85, sb = .85, axis = "var(--accent)") {
+  const mid = h / 2, bw = w / n;
+  let s = `<svg width="100%" height="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`;
+  for (let i = 0; i < n; i++) {
+    const t = i / n, wave = .45 + .35 * Math.sin(t * 8 + 1.3) * Math.sin(t * 2.4 + .4);
+    const a = Math.max(1.5, (wave * .7 + rnd() * .35) * (mid - 3) * sa), b = Math.max(1.5, (wave * .75 + rnd() * .3) * (mid - 3) * sb);
+    const x = i * bw + bw * .18, ww = bw * .64, o = (.4 + .6 * t).toFixed(2);
+    s += `<rect x="${x}" y="${mid - 1.5 - a}" width="${ww}" height="${a}" rx="${Math.min(ww / 2, 2)}" fill="${ca}" opacity="${o}"/><rect x="${x}" y="${mid + 1.5}" width="${ww}" height="${b}" rx="${Math.min(ww / 2, 2)}" fill="${cb}" opacity="${o}"/>`;
+  }
+  return s + `<line x1="0" x2="${w}" y1="${mid}" y2="${mid}" stroke="${axis}" stroke-width=".8" vector-effect="non-scaling-stroke" opacity=".7"/></svg>`;
+}
+function area(w, h, color, flip) {
+  const pts = []; let v = .45;
+  for (let i = 0; i <= 50; i++) { v = Math.min(.92, Math.max(.1, v + (rnd() - .5) * .18)); pts.push([flip ? w - i / 50 * w : i / 50 * w, h - v * h]); }
+  const d = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join("");
+  const id = "g" + Math.round(rnd() * 1e6);
+  return `<svg width="100%" height="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d}L${pts.at(-1)[0]} ${h}L${flip ? w : 0} ${h}Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>`;
+}
+function ring(size, used, stroke = 10) {
+  const r = (size - stroke) / 2, c = size / 2, C = 2 * Math.PI * r, half = C / 2;
+  const u = used / 100, f = 1 - u;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="transform:rotate(-90deg)">
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--fill-2)" stroke-width="${stroke}"/>
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--cpu)" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${C * u - 4} ${C}" transform="scale(1,-1) translate(0,-${size})"/>
+    <circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="var(--up)" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${C * f - 4} ${C}" stroke-dashoffset="0"/>
+    <line x1="${c}" y1="${stroke / 2 - 4}" x2="${c}" y2="${size - stroke / 2 + 4}" stroke="var(--accent)" stroke-width="1" transform="rotate(90 ${c} ${c})" opacity=".6"/></svg>`;
+}
+const appColor = n => ({ canary: "linear-gradient(135deg,#F7C948,#E8730C)", Claude: "linear-gradient(135deg,#E8A27C,#C96442)", Safari: "linear-gradient(135deg,#5AC8FA,#1E6FD9)", WeChat: "linear-gradient(135deg,#6CDB5A,#20A637)", Xcode: "linear-gradient(135deg,#7FC0FF,#1A5BD6)", Mail: "linear-gradient(135deg,#6EC6FF,#1C7CF2)", Surge: "linear-gradient(135deg,#4A4A4A,#111)", Music: "linear-gradient(135deg,#FF7A8A,#FA2D48)", Finder: "linear-gradient(135deg,#8FD3FF,#2F8CF0)" }[n] || "var(--fill-2)");
+
+/* ---------- controls ---------- */
+$("#controls").innerHTML = `
+  <div class="tile"><div style="display:flex;gap:8px;flex-wrap:wrap"><span class="btn pri">Scan</span><span class="btn">Reveal in Finder</span><span class="btn danger">Force Quit</span><span class="btn plain">Details</span></div><h3>Buttons</h3><p>Full-round, 28 pt tall. The prominent style uses the accent. Destructive actions use red text, not a red fill.</p></div>
+  <div class="tile">${cap(`<div class="search">${ico("search", 13)} Search</div>`)}<div style="height:10px"></div>${cap(ib("info") + ib("stop") + `<span class="txt red">Force Quit</span>`)}<h3>Toolbar capsules</h3><p>Related toolbar items share one glass capsule. The capsule floats over the content.</p></div>
+  <div class="tile">${seg(["All", "Apps", "Mine", "System"], "Mine")}<div style="height:10px"></div>${seg(["1 min", "5 min", "1 h"], "5 min")}<h3>Segmented</h3><p>Pill tracks with a raised white thumb. Use them for filters and time ranges.</p></div>
+  <div class="tile"><div class="tr" style="padding:0;height:22px"><div class="sc"><span class="r num l2">3.7</span><div class="b L"><i style="width:60%"></i></div><div class="ax"></div><div class="b R"><i style="width:92%"></i></div><span class="num">10.9 GB</span></div></div><div class="tr" style="padding:0;height:22px"><div class="sc"><span class="r num l2">0.3</span><div class="b L"><i style="width:12%"></i></div><div class="ax"></div><div class="b R"><i style="width:34%"></i></div><span class="num">3.3 GB</span></div></div><h3>Spine cell</h3><p>CPU grows left and memory grows right from one shared axis. It is break one, used inside tables only.</p></div>
+  <div class="tile"><div style="display:flex;gap:16px;align-items:center">${ring(70, 58.8, 8)}<div><div class="hn" style="font-size:28px">412<small>GB free</small></div></div></div><h3>Split ring</h3><p>Used space in the accent turns one way, free space in lime turns the other. They meet at the top.</p></div>
+  <div class="tile"><div style="display:flex;align-items:center;gap:12px"><div class="sw-t on"></div><div class="sw-t"></div><span class="cb on"></span><span class="cb"></span><span class="pop-btn">Every week</span></div><h3>Form controls</h3><p>Standard switches, checkboxes and pop-up buttons. Settings follow the System Settings layout.</p></div>`;
+
+/* ---------- data ---------- */
+const procs = [["canary", 64, 3.7, 10.9, 1449, 18362], ["com.apple.WebKit.WebContent", 6, 0.0, 5.3, 58, 3661], ["Claude", 28, 0.3, 3.3, 392, 5755], ["omp", 16, 0.0, 3.1, 685, 2831], ["claude", 11, 0.0, 3.0, 227, 6937], ["node", 39, 1.2, 2.1, 330, 3080], ["fff-mcp", 11, 0.4, 1.4, 302, 5460], ["Tern", 2, 0.0, 1.4, 87, 1309], ["WeChat", 15, 0.6, 1.2, 408, 1310], ["python3.15", 9, 0.1, .93, 170, 20703], ["codedb", 25, 2.4, .92, 104, 2946], ["git", 15, 0.0, .86, 180, 2606], ["Floodlight", 0, 0.0, .82, 25, 3607], ["Safari", 3, 0.2, .64, 18, 1252], ["Xcode", 40, 0.2, .24, 473, 11531], ["zsh", 44, 0.0, .23, 44, 1673], ["Finder", 0, 0.0, .26, 7, 1535], ["Surge", 0, 0.1, .21, 14, 1322], ["Music", 0, 0.0, .18, 22, 1290], ["Mail", 0, 0.0, .15, 31, 1288], ["chronod", 0, 0.0, .22, 3, 1167], ["uv", 9, 0.0, .15, 27, 20456], ["Drafts", 0, 0.0, .25, 7, 1523], ["VTDecoderXPCService", 2, 0.0, .29, 8, 19189]];
+const PCOLS = "minmax(0,1.5fr) minmax(0,1.6fr) 70px 64px 90px";
+const procRow = (p, sel) => `<div class="tr${sel ? " sel" : ""}" style="grid-template-columns:${PCOLS}"><div class="dis"><span class="chev">${p[1] ? "›" : ""}</span><span class="ico" style="background:${appColor(p[0])}"></span><b>${p[0]}</b>${p[1] ? `<span class="badge">${p[1]}</span>` : ""}</div>
+  <div class="sc"><span class="r num l2">${p[2].toFixed(1)}</span><div class="b L"><i style="width:${Math.min(100, p[2] * 24 + 1)}%"></i></div><div class="ax"></div><div class="b R"><i style="width:${p[3] / 10.9 * 100}%"></i></div><span class="num" style="${p[3] >= 1 && !sel ? "color:var(--mem);font-weight:500" : ""}">${gb(p[3])}</span></div>
+  <span class="r num">${p[4].toLocaleString()}</span><span class="r num l2">${p[5]}</span><span class="l2" style="padding-left:16px">martinfan</span></div>`;
+const procHead = `<div class="tr th" style="grid-template-columns:${PCOLS}"><span style="padding-left:16px">Process Name</span><div class="sc"><span class="r">% CPU</span><span style="text-align:right">‹</span><span></span><span>›</span><span class="sort">Memory ⌄</span></div><span class="r">Threads</span><span class="r">PID</span><span style="padding-left:16px">User</span></div>`;
+
+const S = [];
+const statusTools = (extra = "") => extra;
+
+S.push(screen("overview", "Overview", "The home pane. CPU and memory face each other across the spine. The network chart spans the full width under them. Disk and Cleanup close out the page.",
+  desk(win("Overview", "Overview", "849 processes · updated every second", seg(["1 min", "5 min", "1 h"], "1 min") + cap(ib("gear")), `
+  <div class="pair" style="height:200px">
+    <div class="box" style="display:flex;flex-direction:column"><h4><span>CPU</span><span>14 cores</span></h4><div class="hn" style="color:var(--cpu)">33<small>%</small></div><div style="flex:1;margin:8px -16px -14px;overflow:hidden;border-radius:0 0 14px 14px">${area(500, 100, "var(--cpu)", true)}</div></div>
+    <div class="spine"></div>
+    <div class="box" style="display:flex;flex-direction:column"><h4><span>Memory</span><span>24 GB</span></h4><div class="hn" style="color:var(--mem)">21.6<small>GB used</small></div><div style="flex:1;margin:8px -16px -14px;overflow:hidden;border-radius:0 0 14px 14px">${area(500, 100, "var(--mem)", false)}</div></div>
+  </div>
+  <div class="box" style="height:190px;display:flex;flex-direction:column"><h4><span>Network · Wi-Fi</span><span><b style="color:var(--up)">↑ 1.8 MB/s</b>&nbsp;&nbsp;&nbsp;<b style="color:var(--down)">↓ 25.6 MB/s</b></span></h4><div style="flex:1">${mirrorChart(900, 140, 110, "var(--up)", "var(--down)", .65, 1)}</div></div>
+  <div class="pair" style="flex:1;min-height:0;margin-bottom:16px">
+    <div class="box" style="display:flex;align-items:center;gap:18px">${ring(96, 58.8, 9)}<div><h4>Macintosh HD</h4><div class="hn" style="font-size:30px">412<small>GB available</small></div><div class="l2" style="font-size:11px;margin-top:4px">588 GB used of 1 TB</div></div></div>
+    <div class="spine"></div>
+    <div class="box" style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:linear-gradient(135deg,var(--up-soft),transparent 70%),var(--win-2)"><div><h4>Cleanup</h4><div class="hn" style="font-size:30px;color:var(--up)">18.4<small>GB to reclaim</small></div><div class="l2" style="font-size:11px;margin-top:4px">Last scan 3 days ago</div></div><span class="btn pri">Review…</span></div>
+  </div>`))));
+
+S.push(screen("processes", "Processes", "A native table with one change. CPU and memory share a single spine cell, so heavy processes read as wide shapes. Rows are 26 pt with alternating fills. The selection is a full accent capsule.",
+  desk(win("Processes", "Processes", "665 shown in 285 groups · 849 in all", cap(`<div class="search">${ico("search", 13)} Search</div>`) + seg(["All", "Apps", "Mine", "System"], "Mine") + cap(ib("info") + ib("stop")), `<div class="tbl">${procHead}${procs.slice(0, 24).map((p, i) => procRow(p, i === 2)).join("")}</div>`))));
+
+S.push(screen("inspector", "Process inspector", "Select a process and press ⌘I. The inspector slides in as a trailing pane, the standard macOS place for detail. History mirrors CPU above the axis and memory below it.",
+  desk(win("Processes", "Processes", "665 shown in 285 groups", cap(`<div class="search">${ico("search", 13)} Search</div>`) + cap(ib("info") + ib("stop")), `
+  <div style="display:grid;grid-template-columns:1fr 330px;gap:0;flex:1;min-height:0;margin:0 -20px">
+    <div class="tbl" style="margin:0;border-right:.5px solid var(--sep)">${procHead.replace(PCOLS, "minmax(0,1.2fr) minmax(0,1.4fr) 0 0 0")}${procs.slice(0, 22).map((p, i) => procRow(p, i === 0).replace(PCOLS, "minmax(0,1.2fr) minmax(0,1.4fr) 0 0 0")).join("")}</div>
+    <div style="padding:6px 20px;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+      <div style="display:flex;gap:12px;align-items:center"><span class="appi" style="width:40px;height:40px;border-radius:10px;background:${appColor("canary")}"></span><div><div style="font:700 17px var(--sys)">canary</div><div class="l2" style="font-size:11px">Google Chrome Canary · PID <span class="mono">18362</span></div></div></div>
+      <div class="box" style="height:150px;padding:10px 12px;display:flex;flex-direction:column"><h4><span style="color:var(--cpu)">CPU ↑</span><span style="color:var(--mem)">Memory ↓</span></h4><div style="flex:1">${mirrorChart(300, 110, 46, "var(--cpu)", "var(--mem)")}</div></div>
+      <div class="fgroup">${[["Threads", "1,449"], ["Ports", "3,210"], ["Open files", "812"], ["CPU time", "2:06:06"], ["Disk read", "786 KB/s"], ["Network", "1.2 MB/s"], ["Children", "64"]].map(([k, v]) => `<div class="frow" style="min-height:30px;padding:6px 12px"><span class="l2">${k}</span><span class="num">${v}</span></div>`).join("")}</div>
+      <div style="display:flex;gap:8px"><span class="btn" style="flex:1">Sample</span><span class="btn" style="flex:1">Reveal</span><span class="btn danger" style="flex:1">Quit…</span></div>
+    </div>
+  </div>`, { status: false }))));
+
+S.push(screen("force-quit", "Force Quit sheet", "A standard alert sheet attached to the window. It names the cost in plain words before the person commits.",
+  desk(win("Processes", "Processes", "665 shown in 285 groups", cap(`<div class="search">${ico("search", 13)} Search</div>`) + cap(ib("info") + ib("stop")), `<div class="tbl">${procHead}${procs.slice(0, 24).map((p, i) => procRow(p, i === 0)).join("")}</div>`,
+  { status: false, overlay: `<div class="scrim"></div><div class="sheet"><span class="appi" style="width:58px;height:58px;border-radius:14px;background:${appColor("canary")}"></span><h5>Force quit “canary” and its 64 processes?</h5><p>Unsaved work in open tabs will be lost. canary is using 10.9 GB of memory.</p><div class="acts"><span class="btn pri" style="background:var(--red);color:#fff">Force Quit</span><span class="btn">Quit Normally</span><span class="btn plain" style="color:var(--label)">Cancel</span></div></div>` }))));
+
+const apps = [["Safari", 120, 4800], ["Claude", 860, 3100], ["Surge", 400, 2600], ["git", 1400, 1900], ["WeChat", 210, 1500], ["node", 640, 900], ["Xcode", 30, 610], ["Mail", 90, 420], ["Music", 4, 380], ["Finder", 2, 120], ["canary", 60, 90]];
+const NCOLS = "minmax(0,1fr) minmax(0,2fr) 110px";
+S.push(screen("network", "Network", "Upload rises above the axis and download falls below it. The per-app table uses the same spine cell. What an app sends grows left in lime. What it receives grows right in sand.",
+  desk(win("Network", "Network", "Wi-Fi · 192.168.1.24 · gateway 4 ms", seg(["Wi-Fi", "Thunderbolt", "VPN"], "Wi-Fi") + seg(["1 min", "5 min", "1 h"], "5 min"), `
+  <div class="pair" style="align-items:end"><div><div class="l2" style="font-size:12px;font-weight:500">Upload</div><div class="hn" style="color:var(--up);font-size:48px">1.8<small>MB/s</small></div></div><div class="spine" style="height:100%"></div><div style="text-align:right"><div class="l2" style="font-size:12px;font-weight:500">Download</div><div class="hn" style="color:var(--down);font-size:48px">25.6<small>MB/s</small></div></div></div>
+  <div style="height:190px;margin:0 -4px">${mirrorChart(1000, 190, 140, "var(--up)", "var(--down)", .55, 1)}</div>
+  <div class="tbl"><div class="tr th" style="grid-template-columns:${NCOLS}"><span style="padding-left:16px">App</span><div class="sc" style="grid-template-columns:70px 1fr 1px 1fr 70px"><span class="r">Sent</span><span></span><span></span><span></span><span class="sort">Received ⌄</span></div><span class="r">Total since boot</span></div>
+  ${apps.map(a => `<div class="tr" style="grid-template-columns:${NCOLS}"><div class="dis"><span class="chev"></span><span class="ico" style="background:${appColor(a[0])}"></span><b>${a[0]}</b></div><div class="sc" style="grid-template-columns:70px 1fr 1px 1fr 70px"><span class="r num" style="color:var(--up)">${kb(a[1])}/s</span><div class="b L"><i style="width:${a[1] / 14}%;background:var(--up)"></i></div><div class="ax"></div><div class="b R"><i style="width:${a[2] / 48}%;background:var(--down)"></i></div><span class="num">${kb(a[2])}/s</span></div><span class="r num l2">${(a[2] / 210).toFixed(1)} GB</span></div>`).join("")}</div>`))));
+
+const conns = [["Claude", "TCP", "api.anthropic.com", "443", "Established", 420, 1900], ["canary", "TCP", "github.com", "443", "Established", 90, 840], ["Surge", "TCP", "127.0.0.1", "6152", "Listening", 0, 0], ["Safari", "TCP", "17.253.144.10", "443", "Established", 12, 640], ["WeChat", "TCP", "szextshort.weixin.qq.com", "443", "Established", 40, 210], ["node", "TCP", "localhost", "3000", "Listening", 0, 0], ["git", "TCP", "github.com", "22", "Closing", 1400, 120], ["mDNSResponder", "UDP", "224.0.0.251", "5353", "—", 2, 6], ["fff-mcp", "TCP", "localhost", "7811", "Listening", 0, 0], ["Mail", "TCP", "imap.mail.me.com", "993", "Established", 3, 44], ["Music", "TCP", "aod.itunes.apple.com", "443", "Established", 1, 380], ["Xcode", "TCP", "developerservices2.apple.com", "443", "Established", 8, 52], ["ControlCenter", "TCP", "*", "7000", "Listening", 0, 0]];
+const CCOLS = "130px 46px minmax(0,1.3fr) minmax(0,1.3fr) 100px";
+S.push(screen("connections", "Connections", "Every open socket, live, in a sortable table. The state column uses colour only as a second signal. The text always names the state.",
+  desk(win("Network", "Connections", "142 sockets · 38 established · 11 listening", cap(`<div class="search">${ico("search", 13)} Host or port</div>`) + seg(["All", "Listening", "Established", "Outbound"], "All"), `
+  <div class="tbl"><div class="tr th" style="grid-template-columns:${CCOLS}"><span style="padding-left:16px">Process</span><span>Proto</span><span>Remote Host</span><div class="sc" style="grid-template-columns:52px 1fr 1px 1fr 56px"><span class="r">Sent</span><span></span><span></span><span></span><span>Received</span></div><span style="padding-left:16px">State</span></div>
+  ${conns.map((c, i) => `<div class="tr${i === 0 ? " sel" : ""}" style="grid-template-columns:${CCOLS}"><div class="dis"><span class="chev"></span><span class="ico" style="background:${appColor(c[0])}"></span><b>${c[0]}</b></div><span class="l2">${c[1]}</span><span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c[2]}<span class="l2">:${c[3]}</span></span><div class="sc" style="grid-template-columns:52px 1fr 1px 1fr 56px"><span class="r num l2">${c[5] ? kb(c[5]) : "—"}</span><div class="b L"><i style="width:${c[5] / 15}%;background:var(--up)"></i></div><div class="ax"></div><div class="b R"><i style="width:${c[6] / 20}%;background:var(--down)"></i></div><span class="num">${c[6] ? kb(c[6]) : "—"}</span></div><span style="padding-left:16px;display:flex;align-items:center;gap:6px"><i style="width:6px;height:6px;border-radius:50%;background:${i === 0 ? "var(--on-accent)" : c[4] === "Established" ? "var(--up)" : c[4] === "Listening" ? "var(--accent)" : "var(--label-3)"}"></i>${c[4]}</span></div>`).join("")}</div>`))));
+
+const cats = [["System caches", "~/Library/Caches", 1.4, "folder"], ["Xcode DerivedData", "~/Library/Developer/Xcode/DerivedData", 7.2, "Xcode"], ["iOS Simulators", "~/Library/Developer/CoreSimulator", 4.1, "Xcode"], ["Homebrew cache", "~/Library/Caches/Homebrew", 2.3, "folder"], ["bun, npm and uv caches", "~/.bun · ~/.npm · ~/.cache/uv", 1.9, "folder"], ["Logs", "~/Library/Logs", .82, "folder"], ["Trash", "~/.Trash", .64, "trash"], ["Mail attachments", "~/Library/Containers/com.apple.mail", 3.0, "Mail"], ["Large and old files", "Over 1 GB, unopened for 180 days", 6.6, "folder"], ["Old downloads", "~/Downloads, older than 90 days", 2.2, "folder"]];
+const catIcon = c => c[3] === "folder" || c[3] === "trash" ? `<span class="appi" style="display:grid;place-items:center;background:var(--fill);color:var(--accent);box-shadow:none">${ico(c[3], 14)}</span>` : `<span class="appi" style="background:${appColor(c[3])}"></span>`;
+
+S.push(screen("cleanup-idle", "Cleanup · ready", "Before a scan. The split ring shows the disk at a glance. Safe caches start checked. Personal files start unchecked and sit apart in their own group.",
+  desk(win("Cleanup", "Cleanup", "Full Disk Access is on", cap(`<span class="txt" style="color:var(--up)">● Full Disk Access</span>`) + cap(ib("gear")), `
+  <div style="display:grid;grid-template-columns:auto 1fr;gap:32px;align-items:center;padding:10px 4px 6px">
+    <div style="position:relative">${ring(170, 58.8, 12)}<div style="position:absolute;inset:0;display:grid;place-content:center;text-align:center"><div class="hn" style="font-size:30px">412</div><div class="l2" style="font-size:11px">GB available</div></div></div>
+    <div><div style="font:700 30px/1.1 var(--display);letter-spacing:-.025em;max-width:16ch">Find space you can safely take back.</div><p class="l2" style="margin:8px 0 16px;max-width:52ch">nanokeep moves what it finds to the Trash. You can put anything back until you empty it.</p><div style="display:flex;gap:8px"><span class="btn pri lg">${ico("play", 12)}&nbsp;Scan</span><span class="btn lg">Choose Folders…</span></div></div>
+  </div>
+  <div class="pair" style="flex:1;min-height:0;margin-bottom:16px">
+    <div class="box"><h4><span>Safe to remove</span><span>Rebuilt on demand</span></h4>${cats.slice(0, 7).map(c => `<div class="row" style="grid-template-columns:16px 22px 1fr"><span class="cb on"></span>${catIcon(c)}<span>${c[0]}<span class="sub mono">${c[1]}</span></span></div>`).join("")}</div>
+    <div class="spine"></div>
+    <div class="box"><h4><span>Needs your review</span><span>Your files</span></h4>${cats.slice(7).map(c => `<div class="row" style="grid-template-columns:16px 22px 1fr"><span class="cb"></span>${catIcon(c)}<span>${c[0]}<span class="sub">${c[1]}</span></span></div>`).join("")}<p class="l2" style="font-size:11px;margin-top:10px">These stay unchecked until you choose them.</p></div>
+  </div>`, { status: false }))));
+
+S.push(screen("cleanup-scanning", "Cleanup · scanning", "The scan reports as it goes. Each category gets a spine row: files checked grow left, space found grows right. Finished rows settle, the current row breathes, and waiting rows stay quiet.",
+  desk(win("Cleanup", "Scanning…", "~/Library/Caches/com.apple.Safari", cap(`<span class="txt">Stop</span>`), `
+  <div class="pair" style="align-items:end"><div><div class="l2" style="font-size:12px;font-weight:500">Files checked</div><div class="hn" style="font-size:48px">214,093</div></div><div class="spine" style="height:100%"></div><div style="text-align:right"><div class="l2" style="font-size:12px;font-weight:500">Found so far</div><div class="hn" style="font-size:48px;color:var(--up)">12.7<small>GB</small></div></div></div>
+  <div style="height:6px;border-radius:99px;background:var(--fill-2);overflow:hidden"><div style="width:47%;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--up))"></div></div>
+  <div class="tbl" style="margin-top:4px">${cats.map((c, i) => { const st = i < 4 ? 2 : i === 4 ? 1 : 0, f = st === 2 ? c[2] : st === 1 ? c[2] * .55 : 0;
+    return `<div class="tr" style="grid-template-columns:22px minmax(0,1fr) minmax(0,1.6fr);height:44px;opacity:${st ? 1 : .4}"><span>${st === 2 ? `<span style="color:var(--up);font-weight:700">✓</span>` : st === 1 ? `<i class="pulse" style="display:block;width:8px;height:8px;border-radius:50%;background:var(--accent)"></i>` : `<i style="display:block;width:8px;height:8px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--label-3)"></i>`}</span><span>${c[0]}<span class="l2" style="display:block;font-size:11px">${st ? Math.round(c[2] * 9229 + 717).toLocaleString() + " files" : "Waiting"}</span></span>
+    <div class="sc" style="grid-template-columns:0 1fr 1px 1fr 64px"><span></span><div class="b L"><i style="width:${st ? Math.min(100, c[2] * 12) : 0}%;opacity:.45"></i></div><div class="ax"></div><div class="b R"><i style="width:${f * 12}%;background:var(--up)"></i></div><span class="num" style="text-align:right;${f ? "color:var(--up);font-weight:500" : "color:var(--label-3)"}">${f ? gb(f) : "—"}</span></div></div>`; }).join("")}</div>`, { status: false }))));
+
+const remove = cats.slice(0, 7), keep = cats.slice(7), tot = remove.reduce((a, c) => a + c[2], 0);
+S.push(screen("cleanup-review", "Cleanup · review", "The results split across the spine. Remove is on the left and Keep is on the right. Clicking an item moves it across, and both totals update. The prominent button always states the exact amount.",
+  desk(win("Cleanup", "Review", `${gb(tot + 11.8)} found in 10 categories`, cap(`<span class="txt">Review Files…</span>`) + `<span class="btn pri">Move ${gb(tot)} to Trash</span>`, `
+  <div class="pair" style="align-items:end"><div><div class="l2" style="font-size:12px;font-weight:500">Remove</div><div class="hn" style="font-size:52px;color:var(--up)">${tot.toFixed(1)}<small>GB</small></div></div><div class="spine" style="height:100%"></div><div style="text-align:right"><div class="l2" style="font-size:12px;font-weight:500">Keep</div><div class="hn" style="font-size:52px;color:var(--label-2)">11.8<small>GB</small></div></div></div>
+  <div class="pair" style="flex:1;min-height:0;margin-bottom:12px">
+    <div class="box" style="background:linear-gradient(160deg,var(--up-soft),transparent 60%),var(--win-2)">${remove.map((c, i) => `<div class="row" style="grid-template-columns:16px 22px 1fr 90px 60px"><span class="cb on"></span>${catIcon(c)}<span>${c[0]}${i === 0 ? `<span class="sub mono">${c[1]}</span>` : ""}</span><div style="height:5px;display:flex;justify-content:flex-end"><i style="display:block;width:${c[2] / 7.2 * 100}%;background:var(--up);border-radius:3px"></i></div><span class="num r" style="text-align:right">${gb(c[2])}</span></div>`).join("")}</div>
+    <div class="spine"></div>
+    <div class="box">${keep.map(c => `<div class="row" style="grid-template-columns:60px 90px 1fr 22px 16px"><span class="num l2">${gb(c[2])}</span><div style="height:5px"><i style="display:block;height:100%;width:${c[2] / 7.2 * 100}%;background:var(--label-3);border-radius:3px"></i></div><span style="text-align:right">${c[0]}</span>${catIcon(c)}<span class="cb"></span></div>`).join("")}<p class="l2" style="font-size:11px;margin-top:12px;text-align:right">Your own files never move without a check.</p></div>
+  </div>`, { status: false }))));
+
+S.push(screen("cleanup-confirm", "Move to Trash sheet", "One last check before the move. The sheet repeats the total and promises the undo path. Return confirms and Escape cancels, as in every Mac app.",
+  desk(win("Cleanup", "Review", `${gb(tot + 11.8)} found in 10 categories`, `<span class="btn pri">Move ${gb(tot)} to Trash</span>`, `<div class="pair" style="flex:1;margin-bottom:12px"><div class="box"></div><div class="spine"></div><div class="box"></div></div>`,
+  { status: false, overlay: `<div class="scrim"></div><div class="sheet"><div class="appicon"><i></i></div><h5>Move ${gb(tot)} to the Trash?</h5><p>7 categories and 41,206 items will move to the Trash. Caches rebuild on their own. You can put anything back until you empty the Trash.</p><div class="acts"><span class="btn pri">Move to Trash</span><span class="btn plain" style="color:var(--label)">Cancel</span></div></div>` }))));
+
+S.push(screen("cleanup-done", "Cleanup · done", "The result as one bar. Used space is on the left and free space on the right. The slice taken back glows where the two halves meet.",
+  desk(win("Cleanup", "Done", "Moved 7 categories to the Trash", ``, `
+  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding-bottom:30px">
+    <div class="appicon" style="width:76px;height:76px;border-radius:18px"><i></i></div>
+    <div><div class="l2" style="font-weight:500">You took back</div><div class="hn" style="font-size:120px;line-height:.95;color:var(--up);letter-spacing:-.04em">18.4<small style="font-size:28px">GB</small></div></div>
+    <div style="width:700px"><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--label-2);margin-bottom:8px"><span>Before · 412 GB available</span><span>After · 430.4 GB available</span></div>
+      <div style="display:flex;height:12px;border-radius:99px;overflow:hidden;background:var(--fill-2)"><i style="width:56.9%;background:var(--cpu)"></i><i style="width:1.84%;background:var(--up);box-shadow:0 0 18px 2px var(--up)"></i><i style="flex:1;background:var(--up-soft)"></i></div></div>
+    <div style="display:flex;gap:8px"><span class="btn lg">Open Trash</span><span class="btn lg danger">Empty Trash…</span><span class="btn pri lg">Done</span></div>
+    <div class="l2" style="font-size:11px">nanokeep will suggest another scan in 14 days.</div>
+  </div>`, { status: false }))));
+
+S.push(screen("fda", "Full Disk Access", "A first-run sheet. It explains why the permission matters, then hands off to System Settings. The app card can be dragged into the Settings list.",
+  desk(win("Cleanup", "Cleanup", "Full Disk Access is off", ``, `<div class="pair" style="flex:1;margin-bottom:12px;opacity:.5"><div class="box"></div><div class="spine"></div><div class="box"></div></div>`,
+  { status: false, overlay: `<div class="scrim"></div><div class="sheet" style="width:460px"><div style="color:var(--accent)">${ico("shield", 44)}</div><h5>Allow nanokeep to see your whole disk</h5><p>Without Full Disk Access, nanokeep cannot measure Mail, Safari and app containers. It reads sizes only. It never opens your files.</p>
+    <div style="display:flex;align-items:center;gap:12px;width:100%;padding:10px 12px;border-radius:12px;background:var(--win-2);box-shadow:inset 0 0 0 .5px var(--sep);text-align:left;cursor:grab"><div class="appicon" style="width:36px;height:36px;border-radius:9px"><i></i></div><span style="flex:1"><b style="font-weight:600">nanokeep</b><span class="l2" style="display:block;font-size:11px">Drag this into the list in System Settings</span></span><span class="l3">⠿</span></div>
+    <div class="acts"><span class="btn pri">Open System Settings</span><span class="btn plain" style="color:var(--label)">Not Now</span></div></div>` }))));
+
+function icicle() {
+  const W = 880, H = 300, cx = W / 2, lw = 140, g = 3;
+  const L = [["Library", 214, [["Developer", 96, [["Xcode", 52], ["CoreSimulator", 38], ["Other", 6]]], ["Containers", 52, [["WeChat", 30], ["Other", 22]]], ["Caches", 41, [["Homebrew", 14], ["Safari", 11], ["Other", 16]]], ["Other", 25, []]]]];
+  const R = [["devv", 168, [["pulse", 61, [["node_modules", 41], ["Other", 20]]], ["nanokeep", 22, [["zig-cache", 14], ["Other", 8]]], ["Other", 85, []]]], ["Movies", 92, [["Final Cut", 70, []], ["Other", 22, []]]]];
+  const k = H / 282; let s = `<svg width="100%" viewBox="0 0 ${W} ${H}">`;
+  const op = [1, .62, .36];
+  function draw(nodes, d, y0, dir) {
+    let y = y0;
+    for (const n of nodes) {
+      const h = n[1] * k, x = dir < 0 ? cx - 8 - (d + 1) * lw : cx + 8 + d * lw, other = n[0] === "Other";
+      s += `<rect x="${x + g / 2}" y="${y + g / 2}" width="${lw - g}" height="${Math.max(1, h - g)}" rx="6" fill="${dir < 0 ? "var(--cpu)" : "var(--mem)"}" opacity="${other ? .14 : op[d]}"/>`;
+      const tx = dir < 0 ? x + lw - 12 : x + 12, anc = dir < 0 ? "end" : "start", fill = d === 0 ? "#fff" : "var(--label)";
+      if (h > 22) s += `<text x="${tx}" y="${y + 18}" font-size="11.5" font-weight="600" fill="${other ? "var(--label-2)" : fill}" text-anchor="${anc}" font-family="-apple-system, Inter, sans-serif">${n[0]}</text>`;
+      if (h > 38) s += `<text x="${tx}" y="${y + 33}" font-size="10.5" fill="${other ? "var(--label-3)" : fill}" opacity=".75" text-anchor="${anc}" font-family="-apple-system, Inter, sans-serif">${n[1]} GB</text>`;
+      if (n[2]) draw(n[2], d + 1, y, dir);
+      y += h;
+    }
+  }
+  draw(L, 0, 0, -1); draw(R, 0, 0, 1);
+  return s + `<line x1="${cx}" x2="${cx}" y1="0" y2="${H}" stroke="var(--accent)" stroke-width="1" opacity=".7"/></svg>`;
+}
+S.push(screen("disk", "Disk", "A mirrored icicle of the home folder. System folders grow left in violet. Your own work grows right in sand. Depth runs outward from the spine, so the biggest leaves sit at the edges.",
+  desk(win("Disk", "Disk", "Macintosh HD · 588 of 1,000 GB used", cap(`<span class="txt">↧ 786 KB/s</span><span class="txt">↥ 120 KB/s</span>`) + cap(ib("folder")), `
+  <div style="display:flex;gap:6px;align-items:center;font-size:12px" class="l2">${ico("disk", 13)} Macintosh HD › Users › <b style="color:var(--label);font-weight:500">martinfan</b></div>
+  <div class="box" style="padding:16px">${icicle()}</div>
+  <div class="pair" style="margin-bottom:16px">
+    <div class="box"><h4>Largest system items</h4>${[["Xcode", "52 GB"], ["CoreSimulator", "38 GB"], ["WeChat", "30 GB"]].map(r => `<div class="row" style="grid-template-columns:1fr auto auto;min-height:30px"><span>${r[0]}</span><span class="num">${r[1]}</span><span class="btn plain" style="height:20px;font-size:12px">Reveal</span></div>`).join("")}</div>
+    <div class="spine"></div>
+    <div class="box"><h4>Largest personal items</h4>${[["Final Cut", "70 GB"], ["node_modules", "41 GB"], ["zig-cache", "14 GB"]].map(r => `<div class="row" style="grid-template-columns:1fr auto auto;min-height:30px"><span>${r[0]}</span><span class="num">${r[1]}</span><span class="btn plain" style="height:20px;font-size:12px">Reveal</span></div>`).join("")}</div>
+  </div>`))));
+
+S.push(screen("cpu-memory", "CPU and memory", "Performance cores sit left of the spine and efficiency cores right. Memory breaks into used and available along the same axis, and memory pressure uses the familiar green, yellow and red.",
+  desk(win("CPU", "CPU", "Apple M4 Pro · 10 performance and 4 efficiency cores", cap(`<span class="txt" style="color:var(--up)">● Thermal: Nominal</span>`) + cap(`<span class="txt">Load 3.2 · 2.9 · 2.7</span>`), `
+  <div class="pair" style="height:210px">
+    <div class="box" style="display:flex;flex-direction:column"><h4><span>Performance cores</span><span>10</span></h4><div style="flex:1;display:flex;gap:6px;align-items:flex-end">${Array.from({ length: 10 }, () => { const v = rnd() * .75 + .12; return `<div style="flex:1;height:100%;border-radius:6px;background:var(--fill);display:flex;align-items:flex-end;overflow:hidden"><i style="display:block;width:100%;height:${v * 100}%;background:linear-gradient(var(--cpu),color-mix(in srgb,var(--cpu) 60%,transparent));border-radius:6px"></i></div>`; }).join("")}</div></div>
+    <div class="spine"></div>
+    <div class="box" style="display:flex;flex-direction:column"><h4><span>Efficiency cores</span><span>4</span></h4><div style="flex:1;display:flex;gap:6px;align-items:flex-end">${Array.from({ length: 4 }, () => { const v = rnd() * .4 + .35; return `<div style="flex:1;height:100%;border-radius:6px;background:var(--fill);display:flex;align-items:flex-end;overflow:hidden"><i style="display:block;width:100%;height:${v * 100}%;background:color-mix(in srgb,var(--cpu) 55%,transparent);border-radius:6px"></i></div>`; }).join("")}</div></div>
+  </div>
+  <div class="box" style="height:150px;display:flex;flex-direction:column"><h4><span style="color:var(--cpu)">User ↑</span><span style="color:var(--mem)">System ↓</span></h4><div style="flex:1">${mirrorChart(900, 110, 120, "var(--cpu)", "var(--mem)", .8, .45)}</div></div>
+  <div class="box" style="margin-bottom:16px"><h4><span>Memory · 21.6 GB used</span><span>2.4 GB available</span></h4>
+    <div style="display:flex;height:22px;gap:2px;align-items:stretch"><i style="flex:11.2;background:var(--cpu);border-radius:6px 2px 2px 6px"></i><i style="flex:4.8;background:color-mix(in srgb,var(--cpu) 65%,transparent);border-radius:2px"></i><i style="flex:5.6;background:color-mix(in srgb,var(--cpu) 35%,transparent);border-radius:2px"></i><i style="width:1px;background:var(--accent);margin:-4px 3px"></i><i style="flex:1.6;background:var(--mem);border-radius:2px"></i><i style="flex:.8;background:var(--up);border-radius:2px 6px 6px 2px"></i></div>
+    <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:11px" class="l2"><span>App 11.2 · Wired 4.8 · Compressed 5.6 GB</span><span>Cached 1.6 · Free 0.8 GB · Swap 3.1 GB</span></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:12px;font-size:12px"><span class="l2">Memory pressure</span><div style="flex:1;height:6px;border-radius:99px;background:linear-gradient(90deg,#34C759 0 55%,var(--yellow) 55% 80%,var(--red) 80%);opacity:.85;position:relative"><i style="position:absolute;left:62%;top:-4px;width:3px;height:14px;border-radius:2px;background:var(--label)"></i></div><span style="color:var(--yellow);font-weight:600">Moderate</span></div></div>`))));
+
+S.push(screen("menubar", "Menu bar extra and notification", "nanokeep in the menu bar. The popover folds the spine into 330 pt. A quiet notification offers a cleanup when free space drops below a threshold.",
+  desk(`<div style="position:relative;height:600px;width:1180px;margin:0 auto;border-radius:16px;overflow:hidden;box-shadow:inset 0 0 0 .5px var(--sep)">
+    <div class="mbar"><b></b><b>Finder</b><span>File</span><span>Edit</span><span>View</span><span class="sp"></span><span class="me"><span style="color:var(--cpu)">33%</span><span style="opacity:.4">|</span><span style="color:var(--mem)">21.6G</span></span><span>Wi-Fi</span><span>Tue 21 Oct 14:20</span></div>
+    <div style="position:absolute;top:34px;right:150px" class="pop">
+      <div class="pair" style="align-items:end"><div><div class="l2" style="font-size:11px;font-weight:500">CPU</div><div class="hn" style="font-size:32px;color:var(--cpu)">33<small>%</small></div></div><div class="spine" style="height:100%"></div><div style="text-align:right"><div class="l2" style="font-size:11px;font-weight:500">Memory</div><div class="hn" style="font-size:32px;color:var(--mem)">21.6<small>GB</small></div></div></div>
+      <div class="box" style="height:84px;padding:8px 10px"><div style="height:100%">${mirrorChart(300, 70, 46, "var(--up)", "var(--down)", .6, 1)}</div></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:500"><span style="color:var(--up)">↑ 1.8 MB/s</span><span style="color:var(--down)">↓ 25.6 MB/s</span></div>
+      <div>${procs.slice(0, 5).map(p => `<div class="tr" style="padding:0 4px;height:24px;grid-template-columns:96px 1fr;font-size:12px"><div class="dis"><span class="ico" style="width:14px;height:14px;background:${appColor(p[0])}"></span><b>${p[0].replace("com.apple.WebKit.", "")}</b></div><div class="sc" style="grid-template-columns:28px 1fr 1px 1fr 48px"><span class="r num l2">${p[2].toFixed(1)}</span><div class="b L"><i style="width:${p[2] * 24 + 2}%"></i></div><div class="ax"></div><div class="b R"><i style="width:${p[3] / 10.9 * 100}%"></i></div><span class="num r" style="text-align:right">${gb(p[3])}</span></div></div>`).join("")}</div>
+      <div class="box" style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px"><span><b class="hn" style="font-size:17px;color:var(--up)">18.4 GB</b> <span class="l2" style="font-size:12px">to reclaim</span></span><span class="btn pri" style="height:24px;font-size:12px">Clean Up…</span></div>
+      <div style="display:flex;justify-content:space-between;padding:0 4px;font-size:12px"><span>Open nanokeep</span><span class="l3">⌘O</span></div>
+    </div>
+    <div style="position:absolute;top:40px;left:40px" class="notif"><div class="appicon"><i></i></div><div><b style="font-size:13px">Disk space is low</b><div style="font-size:12px" class="l2">Only 24 GB left. nanokeep found 18.4 GB you can take back.</div></div><span class="l3" style="font-size:11px;align-self:start">now</span></div>
+  </div>`)));
+
+S.push(screen("settings", "Settings", "A standard settings window with toolbar tabs. Grouped rows, switches and pop-up buttons, exactly as in System Settings.",
+  desk(`<div class="swin"><div class="stb"><div class="lights"><i></i><i></i><i></i></div><b style="font-size:13px">Cleanup</b><div class="tabs">${[["General", "gear"], ["Monitor", "processes"], ["Network", "network"], ["Cleanup", "cleanup"], ["Alerts", "bell"]].map(t => `<div class="tab${t[0] === "Cleanup" ? " on" : ""}">${ico(t[1], 20)}<span>${t[0]}</span></div>`).join("")}</div></div>
+    <div class="form">
+      <div class="fgroup"><div class="frow"><span>Suggest a scan<span class="sub">nanokeep reminds you when caches grow.</span></span><span class="pop-btn">Every 2 weeks</span></div><div class="frow"><span>Alert when free space is below</span><span class="pop-btn">25 GB</span></div><div class="frow"><span>Scan in the background while on power</span><div class="sw-t on"></div></div></div>
+      <div class="fgroup"><div class="frow"><span>Include personal files in results<span class="sub">Large files, old downloads and Mail attachments. Never checked by default.</span></span><div class="sw-t on"></div></div><div class="frow"><span>Empty the Trash after cleanup</span><div class="sw-t"></div></div></div>
+      <div class="fgroup"><div class="frow"><span>Folders to skip</span><span class="btn" style="height:24px;font-size:12px">Add…</span></div>${["~/devv/pulse/node_modules", "~/Movies/Final Cut"].map(p => `<div class="frow" style="min-height:32px"><span class="mono">${p}</span><span class="l3">−</span></div>`).join("")}</div>
+      <div class="fgroup"><div class="frow"><span style="display:flex;gap:10px;align-items:center"><span style="color:var(--up)">${ico("shield")}</span>Full Disk Access</span><span style="color:var(--up);font-weight:500">On</span></div></div>
+    </div></div>`)));
+
+$("#screens").innerHTML = S.join("");
+</script>
+</body>
+</html>
