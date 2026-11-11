@@ -39,6 +39,32 @@ pub fn ago(c: *ui.Context, now: i64, then: i64) []const u8 {
 
 pub const apple_gold = 0xd4a85a;
 
+const narrow_window_w = 1000;
+
+pub fn narrow(c: *ui.Context) bool {
+    return c.size.w < narrow_window_w;
+}
+
+const TileRows = struct {
+    per_row: usize,
+    count: usize = 0,
+    row: ?ui.Div = null,
+
+    fn next(g: *TileRows, c: *ui.Context) void {
+        if (g.count % g.per_row == 0) {
+            g.end();
+            ui.key(c, c.print("tile-row-{d}", .{g.count}));
+            g.row = card.pair(c);
+        }
+        g.count += 1;
+    }
+
+    fn end(g: *TileRows) void {
+        if (g.row) |r| r.end();
+        g.row = null;
+    }
+};
+
 fn brighten(c: *ui.Context) void {
     const fonts = .{ c.theme.font, c.theme.mono_font };
     c.theme = .light;
@@ -98,7 +124,13 @@ fn keys(c: *ui.Context, a: *App) void {
     for (pages[0..@min(pages.len, 9)], 0..) |p, i| if (c.shortcut(.{ .key = @as(u21, '1') + @as(u21, @intCast(i)), .cmd = true })) {
         a.page = p;
     };
-    if (c.shortcut(.{ .key = 'r', .cmd = true })) a.cleaner.scan();
+    const chosen = a.selected != null or a.app_selected != null;
+    const asking = a.confirm_quit or a.confirm_uninstall or a.confirm_clean;
+    if (!asking and c.shortcut(.{ .key = 'r', .cmd = true })) a.cleaner.scan();
+    if (chosen and !asking and c.focus == 0 and c.shortcut(.{ .key = ui.Shortcut.escape })) {
+        a.selected = null;
+        a.app_selected = null;
+    }
 }
 
 fn sidebar(c: *ui.Context, a: *App) void {
@@ -191,7 +223,7 @@ const Tile = struct {
 fn tile(c: *ui.Context, a: *App, t: Tile) void {
     const th = c.theme;
     ui.key(c, t.title);
-    const box = ui.div(c).column().grow().w(0).p(16).gap(10).rounded(card.radius).bg(th.surface).shadow(card.lift).control();
+    const box = ui.div(c).column().grow().w(0).p(16).gap(10).rounded(card.radius).bg(th.surface).shadow(card.lift).control().hover(th.surface.mix(ui.Color.hex(t.tint), 0.045));
     defer box.end();
     if (box.clicked()) a.page = t.page;
     {
@@ -221,9 +253,9 @@ fn overview(c: *ui.Context, a: *App) void {
     card.pageHeader(c, a, "Overview", a.machine.name.get(), true);
     const body = ui.div(c).column().wFull().grow().scrollY().px(20).pb(20).gap(14);
     defer body.end();
+    var tiles: TileRows = .{ .per_row = if (narrow(c)) 2 else 3 };
     {
-        const r = card.pair(c);
-        defer r.end();
+        tiles.next(c);
         tile(c, a, .{
             .page = .cpu,
             .icon = "cpu",
@@ -236,6 +268,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .series = &hw.cpu_series,
         });
         const used = split(size(c, m.memory.used()));
+        tiles.next(c);
         tile(c, a, .{
             .page = .memory,
             .icon = "memorychip",
@@ -251,6 +284,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .tag_color = hw.pressureColor(m.memory.level),
         });
         const start = since(a);
+        tiles.next(c);
         tile(c, a, .{
             .page = .gpu,
             .icon = "cube",
@@ -264,9 +298,8 @@ fn overview(c: *ui.Context, a: *App) void {
         });
     }
     {
-        const r = card.pair(c);
-        defer r.end();
         const free = split(size(c, sy.disk_free));
+        tiles.next(c);
         tile(c, a, .{
             .page = .disk,
             .icon = "internaldrive",
@@ -280,6 +313,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .max = hw.diskMax(a),
         });
         const down = split(rate(c, m.net.in));
+        tiles.next(c);
         tile(c, a, .{
             .page = .network,
             .icon = "network",
@@ -293,6 +327,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .max = @import("view_net.zig").netMax(a),
         });
         const drawing = split(watts(c, sy.power));
+        tiles.next(c);
         tile(c, a, .{
             .page = .energy,
             .icon = "bolt.fill",
@@ -306,8 +341,9 @@ fn overview(c: *ui.Context, a: *App) void {
             .max = hw.powerMax(a),
         });
     }
+    tiles.end();
     {
-        const r = card.pair(c);
+        var r = card.pair(c);
         defer r.end();
         hw.memoryByType(c, a);
         {
@@ -321,6 +357,11 @@ fn overview(c: *ui.Context, a: *App) void {
                 ui.text(c, c.print("{s} in all", .{procs.bytes(&b[0], total)}), .{ .size = 11.5, .color = c.theme.muted });
             }
             card.treemap(c, a, 104);
+        }
+        if (narrow(c)) {
+            r.end();
+            ui.key(c, "energy-row");
+            r = card.pair(c);
         }
         {
             const box = card.half(c);

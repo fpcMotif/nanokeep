@@ -8,15 +8,15 @@ const table = @import("view_table.zig");
 const view = @import("view.zig");
 const App = @import("app.zig").App;
 
-const Col = struct { title: []const u8, sort: groups.Sort, w: ?f32 };
+const Col = struct { title: []const u8, sort: groups.Sort, w: ?f32, roomy: bool = false };
 
 const cols = [_]Col{
     .{ .title = "Name", .sort = .name, .w = null },
     .{ .title = "% CPU", .sort = .cpu, .w = 64 },
     .{ .title = "Memory", .sort = .memory, .w = 84 },
-    .{ .title = "Threads", .sort = .threads, .w = 64 },
+    .{ .title = "Threads", .sort = .threads, .w = 64, .roomy = true },
     .{ .title = "Disk", .sort = .disk, .w = 84 },
-    .{ .title = "CPU Time", .sort = .time, .w = 84 },
+    .{ .title = "CPU Time", .sort = .time, .w = 84, .roomy = true },
     .{ .title = "PID", .sort = .pid, .w = 60 },
     .{ .title = "User", .sort = .user, .w = 96 },
 };
@@ -24,9 +24,9 @@ const cols = [_]Col{
 pub fn page(c: *ui.Context, a: *App) void {
     const th = c.theme;
     {
-        const h = view.header(c, "Processes", c.print("{d} shown in {d} groups · {d} in all", .{ a.table.shown, a.table.groups.items.len, a.sampler.procs.items.len }));
+        const h = view.header(c, "Processes", if (view.narrow(c)) "" else c.print("{d} shown in {d} groups · {d} in all", .{ a.table.shown, a.table.groups.items.len, a.sampler.procs.items.len }));
         defer h.end();
-        _ = ui.textField(c, &a.query, .{ .placeholder = "Search", .width = .{ .px = 160 }, .size = 12 });
+        _ = ui.textField(c, &a.query, .{ .placeholder = "Search", .width = .{ .px = if (view.narrow(c)) 84 else 160 }, .size = 12 });
         _ = ui.segmented(c, &.{ "All", "Apps", "Mine", "System" }, &a.show);
         const chosen = a.selected != null;
         if (ui.button(c, "Quit", .{ .size = 12, .disabled = !chosen }).clicked) {
@@ -42,12 +42,20 @@ pub fn page(c: *ui.Context, a: *App) void {
         const head = ui.div(c).row().wFull().px(14).itemsCenter();
         defer head.end();
         _ = c.leaf(.{ .width = .{ .px = 22 } }, .none, null);
-        for (cols) |col| if (table.head(c, col.title, col.w, col.w != null and col.sort != .user, a.sort == col.sort, a.reversed)) a.sortBy(col.sort);
+        for (cols) |col| {
+            if (col.roomy and view.narrow(c)) continue;
+            if (table.head(c, col.title, col.w, col.w != null and col.sort != .user, a.sort == col.sort, a.reversed)) a.sortBy(col.sort);
+        }
     }
     table.line(c);
-    var rows = ui.list(c, .{ .count = a.table.rows.items.len, .row_height = table.row_h, .padding = .{ .left = 8, .right = 8 } });
-    while (rows.next()) |i| row(c, a, a.table.rows.items[i], i);
-    rows.end();
+    const query = std.mem.trim(u8, a.query.text(), " ");
+    if (a.table.rows.items.len == 0 and query.len > 0) {
+        @import("view_card.zig").emptyList(c, "magnifyingglass", "No Processes Found", c.print("Nothing matches “{s}”.", .{query}));
+    } else {
+        var rows = ui.list(c, .{ .count = a.table.rows.items.len, .row_height = table.row_h, .padding = .{ .left = 8, .right = 8 } });
+        while (rows.next()) |i| row(c, a, a.table.rows.items[i], i);
+        rows.end();
+    }
     table.line(c);
     {
         const foot = ui.div(c).row().wFull().h(28).px(20).gap(14).itemsCenter();
@@ -68,7 +76,8 @@ fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
     ui.key(c, if (p) |pp| c.print("pid-{d}", .{pp.pid}) else c.print("group-{d}", .{g.key}));
     const sel = if (a.selected) |s| (s.group == g.key and ((s.pid == null and p == null) or (p != null and s.pid != null and s.pid.? == p.?.pid))) else false;
     const bg = if (sel) th.accent.alpha(0.2) else if (i % 2 == 1) th.surface_hover.alpha(0.45) else th.background.alpha(0);
-    const d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
+    var d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
+    if (!sel) d = d.hover(th.surface_hover);
     defer d.end();
     const it = d.interaction();
     const open = a.expanded_groups.contains(g.key);
@@ -106,9 +115,10 @@ fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
     const dash = "–";
     table.value(c, if (known) c.print("{d:.1}", .{cpu}) else dash, cols[1].w, null);
     table.value(c, if (known) view.size(c, mem) else dash, cols[2].w, if (mem > 1_000_000_000) ui.Color.hex(0xff9f0a) else null);
-    table.value(c, if (known) c.print("{d}", .{threads}) else dash, cols[3].w, null);
+    const roomy = !view.narrow(c);
+    if (roomy) table.value(c, if (known) c.print("{d}", .{threads}) else dash, cols[3].w, null);
     table.value(c, if (known and disk >= 1) c.print("{s}/s", .{procs.bytes(&b, @intFromFloat(disk))}) else if (known) "0" else dash, cols[4].w, th.muted);
-    table.value(c, if (known) c.print("{s}", .{procs.duration(&b, t)}) else dash, cols[5].w, null);
+    if (roomy) table.value(c, if (known) c.print("{s}", .{procs.duration(&b, t)}) else dash, cols[5].w, null);
     table.value(c, c.print("{d}", .{pid}), cols[6].w, th.muted);
     {
         const u = table.cell(c, cols[7].w, false);

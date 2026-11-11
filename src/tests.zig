@@ -38,6 +38,9 @@ extern "c" fn pclose(f: *anyopaque) c_int;
 extern "c" fn fread(buf: [*]u8, size: usize, n: usize, f: *anyopaque) usize;
 extern "c" fn time(t: ?*i64) i64;
 extern "c" fn getppid() c_int;
+extern "c" fn posix_spawn(pid: *c_int, path: [*:0]const u8, actions: ?*const anyopaque, attr: ?*const anyopaque, argv: [*:null]const ?[*:0]const u8, envp: [*:null]const ?[*:0]const u8) c_int;
+extern "c" fn kill(pid: c_int, sig: c_int) c_int;
+extern "c" fn waitpid(pid: c_int, status: *c_int, options: c_int) c_int;
 
 const gpa = std.testing.allocator;
 
@@ -441,6 +444,37 @@ test "only clean, unlocked linked worktrees are found, and removing one keeps it
     try t.sh("test ! -e devv/clean && git -C devv/repo rev-parse -q --verify refs/heads/clean >/dev/null", .{});
 }
 
+test "a detached worktree is offered only when a branch or tag holds its commits" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p devv/repo && cd devv/repo && git init -q -b main && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git worktree add -q --detach ../pinned && git worktree add -q --detach ../loose && git -C ../loose -c user.email=t@t -c user.name=t commit -q --allow-empty -m lost", .{});
+    var found = try worktree.find(gpa, t.path());
+    defer {
+        for (found.items) |f| {
+            gpa.free(f.path);
+            gpa.free(f.repo);
+        }
+        found.deinit(gpa);
+    }
+    try std.testing.expectEqual(@as(usize, 1), found.items.len);
+    try std.testing.expect(std.mem.endsWith(u8, found.items[0].path, "/devv/pinned"));
+}
+
+test "a worktree with untracked files is not offered when the repo hides untracked files from status" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p devv/repo && cd devv/repo && git init -q -b main && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git config status.showUntrackedFiles no && git worktree add -q ../quiet -b quiet && touch ../quiet/new.txt", .{});
+    var found = try worktree.find(gpa, t.path());
+    defer {
+        for (found.items) |f| {
+            gpa.free(f.path);
+            gpa.free(f.repo);
+        }
+        found.deinit(gpa);
+    }
+    try std.testing.expectEqual(@as(usize, 0), found.items.len);
+}
+
 test "run captures a child's output and exit code" {
     const ok = try run.capture(gpa, &.{ "/bin/echo", "hello" });
     defer ok.deinit(gpa);
@@ -449,6 +483,17 @@ test "run captures a child's output and exit code" {
     const bad = try run.capture(gpa, &.{ "/bin/sh", "-c", "exit 3" });
     defer bad.deinit(gpa);
     try std.testing.expectEqual(@as(u8, 3), bad.code);
+}
+
+test "run reports a child killed by a signal as an error, not as exit 0" {
+    try std.testing.expectError(error.Signaled, run.capture(gpa, &.{ "/bin/sh", "-c", "kill -9 $$" }));
+}
+
+test "run captures output larger than one read" {
+    const big = try run.capture(gpa, &.{ "/usr/bin/head", "-c", "200000", "/dev/zero" });
+    defer big.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 200000), big.out.len);
+    try std.testing.expectEqual(@as(u8, 0), big.code);
 }
 
 var trashed: std.ArrayList([]const u8) = .empty;
@@ -504,6 +549,51 @@ test "cleaning trashes only selected categories, and stale temporary files only"
     }
     try std.testing.expect(saw_cache and saw_temp);
     try std.testing.expectEqual(cache_bytes + stale_bytes, cl.last.?.moved);
+}
+
+test "emptying the Trash counts each item, and one that can't be deleted doesn't hide the rest" {
+    const t = try Tmp.make();
+    defer t.remove();
+    defer clearTrashed();
+    try t.sh("mkdir -p home/.Trash/stuck tmp && dd if=/dev/urandom of=home/.Trash/good bs=4096 count=5 2>/dev/null && dd if=/dev/urandom of='home/.Trash/-rf two words' bs=4096 count=3 2>/dev/null && touch home/.Trash/stuck/held && chflags uchg home/.Trash/stuck/held", .{});
+    defer t.sh("chflags -R nouchg home", .{}) catch {};
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.trash_fn = recordTrash;
+    cl.sync = true;
+    cl.scan();
+    const trash = &cl.cats[@intFromEnum(cleaner.Kind.trash)];
+    try std.testing.expectEqual(@as(usize, 3), trash.items().len);
+    var gb: [160]u8 = undefined;
+    var wb: [160]u8 = undefined;
+    const freed = try duBytes(try t.sub(&gb, "home/.Trash/good")) + try duBytes(try t.sub(&wb, "home/.Trash/-rf two words"));
+    for (&cl.cats) |*c| c.selected = c.spec.kind == .trash;
+    cl.clean();
+    try std.testing.expectEqual(freed, cl.last.?.deleted);
+    try std.testing.expectEqual(@as(u32, 1), cl.last.?.failed);
+    try std.testing.expectEqual(@as(usize, 0), trashed.items.len);
+    try t.sh("test ! -e home/.Trash/good && test ! -e 'home/.Trash/-rf two words' && test -e home/.Trash/stuck/held", .{});
+}
+
+test "emptying a Trash with more items than one batch deletes all of them" {
+    const t = try Tmp.make();
+    defer t.remove();
+    defer clearTrashed();
+    try t.sh("mkdir -p home/.Trash tmp && cd home/.Trash && for i in $(seq 1 250); do touch f$i; done", .{});
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.trash_fn = recordTrash;
+    cl.sync = true;
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 250), cl.cats[@intFromEnum(cleaner.Kind.trash)].items().len);
+    for (&cl.cats) |*c| c.selected = c.spec.kind == .trash;
+    cl.clean();
+    try std.testing.expectEqual(@as(u32, 0), cl.last.?.failed);
+    try t.sh("test -z \"$(ls -A home/.Trash)\"", .{});
 }
 
 test "a repeat scan lists no unchanged folder, and a change shows in the next scan" {
@@ -569,6 +659,46 @@ test "cleaning the developer category removes clean worktrees with git" {
     try std.testing.expectEqual(@as(usize, 0), trashed.items.len);
     try t.sh("test ! -e devv/spare && git -C devv/repo rev-parse -q --verify refs/heads/spare >/dev/null", .{});
     try std.testing.expectEqual(@as(usize, 0), dev.items().len);
+}
+
+test "a temporary file changed after the scan is left alone, and one that vanished is not counted as failed" {
+    const t = try Tmp.make();
+    defer t.remove();
+    defer clearTrashed();
+    try t.sh("mkdir -p home tmp && printf a > tmp/busy.log && printf b > tmp/old.log && printf c > tmp/gone.log && touch -t 202001010000 tmp/busy.log tmp/old.log tmp/gone.log", .{});
+    var hb: [128]u8 = undefined;
+    var tb: [128]u8 = undefined;
+    var cl: cleaner.Cleaner = .init(gpa, try t.sub(&hb, "home"), try t.sub(&tb, "tmp/"));
+    defer cl.deinit();
+    cl.trash_fn = recordTrash;
+    cl.sync = true;
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 3), cl.cats[@intFromEnum(cleaner.Kind.temporary)].items().len);
+    try t.sh("touch tmp/busy.log && rm tmp/gone.log", .{});
+    cl.clean();
+    try std.testing.expectEqual(@as(usize, 1), trashed.items.len);
+    try std.testing.expect(std.mem.endsWith(u8, trashed.items[0], "tmp/old.log"));
+    try std.testing.expectEqual(@as(u32, 2), cl.last.?.kept);
+    try std.testing.expectEqual(@as(u32, 0), cl.last.?.failed);
+}
+
+test "a worktree that gained unreferenced commits after the scan is kept" {
+    const t = try Tmp.make();
+    defer t.remove();
+    defer clearTrashed();
+    try t.sh("mkdir -p devv/repo && cd devv/repo && git init -q -b main && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git worktree add -q ../spare -b spare", .{});
+    var cl: cleaner.Cleaner = .init(gpa, t.path(), "");
+    defer cl.deinit();
+    cl.trash_fn = recordTrash;
+    cl.sync = true;
+    cl.scan();
+    try std.testing.expectEqual(@as(usize, 1), cl.cats[@intFromEnum(cleaner.Kind.developer)].items().len);
+    try t.sh("git -C devv/spare checkout -q --detach && git -C devv/spare -c user.email=t@t -c user.name=t commit -q --allow-empty -m lost", .{});
+    for (&cl.cats) |*c| c.selected = c.spec.kind == .developer;
+    cl.clean();
+    try t.sh("test -e devv/spare", .{});
+    try std.testing.expectEqual(@as(u32, 1), cl.last.?.kept);
+    try std.testing.expectEqual(@as(u32, 0), cl.last.?.failed);
 }
 
 fn refuse(_: c_int, _: c_int) callconv(.c) c_int {
@@ -1208,6 +1338,35 @@ test "the window shows every page, asks before cleaning and before uninstalling"
     try std.testing.expectEqual(@as(usize, 2), trashed.items.len);
 }
 
+test "Command-R does not start a scan while the clean dialog asks" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Library/Caches/com.vendor.big && dd if=/dev/urandom of=Library/Caches/com.vendor.big/blob bs=4096 count=8 2>/dev/null", .{});
+    var a: App = .init(gpa, t.path(), "", &.{});
+    defer a.deinit();
+    a.cleaner.sync = true;
+    a.inventory.loaded = true;
+    a.cleaner.scan();
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(compact_w, compact_h);
+    tester.frame();
+    try tester.clickText("Cleanup");
+    tester.settle(1);
+    var label: [48]u8 = undefined;
+    try tester.clickText(try cleanLabel(&label, &a));
+    tester.settle(1);
+    try std.testing.expect(a.confirm_clean);
+    const started = a.cleaner.started;
+    try std.testing.expect(!tester.shortcut(.{ .key = 'r', .cmd = true }));
+    try std.testing.expectEqual(started, a.cleaner.started);
+    a.confirm_clean = false;
+    tester.settle(1);
+    try std.testing.expect(tester.shortcut(.{ .key = 'r', .cmd = true }));
+    try std.testing.expect(a.cleaner.started != started);
+}
+
 fn shot(tester: *ui.Tester, env: [:0]const u8) !void {
     const path = std.c.getenv(env) orelse return;
     tester.settle(1);
@@ -1347,6 +1506,70 @@ test "the app list loads after the first frame, without blocking it" {
     try std.testing.expect(tester.hasText(fake_name));
     try std.testing.expect(tester.hasText(fake_version));
     try std.testing.expect(a.inventory.apps.items[0].kind != .unknown);
+}
+
+const RemoveFirstWhileMeasuring = struct {
+    inv: *apps.Inventory,
+    done: bool = false,
+
+    fn changed(ctx: *anyopaque) void {
+        const r: *RemoveFirstWhileMeasuring = @ptrCast(@alignCast(ctx));
+        if (r.done or r.inv.measuring == null) return;
+        r.done = true;
+        r.inv.remove(0);
+    }
+};
+
+test "removing an app while sizes are still being measured keeps the list and the sizes in step" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("for n in One Two Three; do mkdir -p Apps/$n.app/Contents/MacOS && cp /usr/bin/true Apps/$n.app/Contents/MacOS/fake && dd if=/dev/urandom of=Apps/$n.app/Contents/blob bs=4096 count=6 2>/dev/null; done", .{});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var inv: apps.Inventory = .{ .gpa = gpa, .dirs = &dirs };
+    defer inv.deinit();
+    var remover: RemoveFirstWhileMeasuring = .{ .inv = &inv };
+    inv.on_change = .{ .ctx = &remover, .func = RemoveFirstWhileMeasuring.changed };
+    inv.load();
+    var spins: usize = 0;
+    while ((!inv.loaded or inv.measuring != null) and spins < max_spins) : (spins += 1) spin();
+    try std.testing.expect(remover.done);
+    try std.testing.expect(inv.loaded and inv.measuring == null);
+    try std.testing.expectEqual(@as(usize, 2), inv.apps.items.len);
+    for (inv.apps.items) |a| {
+        try std.testing.expect(a.measured);
+        try std.testing.expectEqual(try duBytes(a.path), a.size.bytes);
+    }
+}
+
+test "an app picked while the list reloads cannot be uninstalled, and the pick ends when the new list arrives" {
+    const t = try Tmp.make();
+    defer t.remove();
+    defer clearTrashed();
+    try t.sh("mkdir -p Apps/Beta.app Apps/Gamma.app", .{});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.listen();
+    a.trash_app = recordTrash;
+    a.inventory.sync = true;
+    a.inventory.load();
+    const gamma = try appIndex(&a, "Gamma");
+    try t.sh("mkdir Apps/Alpha.app", .{});
+    a.inventory.sync = false;
+    a.inventory.load();
+    try std.testing.expect(a.inventory.listing != null);
+    a.selectApp(gamma);
+    try std.testing.expect(a.selectedApp() == null);
+    a.uninstallSelected();
+    try std.testing.expectEqual(@as(usize, 0), trashed.items.len);
+    var spins: usize = 0;
+    while ((a.inventory.listing != null or a.inventory.measuring != null) and spins < max_spins) : (spins += 1) spin();
+    try std.testing.expectEqual(@as(usize, 3), a.inventory.apps.items.len);
+    try std.testing.expect(a.selectedApp() == null);
+    a.selectApp(try appIndex(&a, "Gamma"));
+    try std.testing.expectEqualStrings("Gamma", a.selectedApp().?.name);
 }
 
 test "app usage comes from process samples, survives a restart, and is unknown with no record" {
@@ -1495,6 +1718,53 @@ test "a scan fills in one category at a time, and Cancel stops it" {
     try std.testing.expectEqual(cleaner.Phase.idle, cl.phase);
 }
 
+const ScanAgainMidScan = struct {
+    cl: *cleaner.Cleaner,
+    tmp: *const Tmp,
+    asked: bool = false,
+
+    fn changed(ctx: *anyopaque) void {
+        const r: *ScanAgainMidScan = @ptrCast(@alignCast(ctx));
+        if (r.asked or r.cl.job == null or r.cl.applied == 0) return;
+        r.asked = true;
+        r.tmp.sh("mkdir -p Library/Caches/com.vendor.late && printf x > Library/Caches/com.vendor.late/f", .{}) catch return;
+        r.cl.scan();
+    }
+};
+
+test "a scan asked for while one runs starts again when it ends, so what changed shows" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Library/Caches/com.vendor.app && printf x > Library/Caches/com.vendor.app/f", .{});
+    var cl: cleaner.Cleaner = .init(gpa, t.path(), "");
+    defer cl.deinit();
+    var again: ScanAgainMidScan = .{ .cl = &cl, .tmp = &t };
+    cl.on_change = .{ .ctx = &again, .func = ScanAgainMidScan.changed };
+    cl.scan();
+    pump(&cl);
+    try std.testing.expect(again.asked);
+    try std.testing.expect(cl.scanned and !cl.cancelled);
+    const caches = cl.cats[@intFromEnum(cleaner.Kind.caches)].items();
+    try std.testing.expectEqual(@as(usize, 2), caches.len);
+    var late = false;
+    for (caches) |it| late = late or std.mem.endsWith(u8, it.path, "com.vendor.late");
+    try std.testing.expect(late);
+}
+
+test "Cancel also drops a scan that was asked for while one ran" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Library/Caches/com.vendor.app && printf x > Library/Caches/com.vendor.app/f", .{});
+    var cl: cleaner.Cleaner = .init(gpa, t.path(), "");
+    defer cl.deinit();
+    cl.scan();
+    cl.scan();
+    cl.cancel();
+    pump(&cl);
+    try std.testing.expect(cl.cancelled and !cl.scanned);
+    try std.testing.expectEqual(cleaner.Phase.idle, cl.phase);
+}
+
 fn fakeClock() f64 {
     return 0;
 }
@@ -1505,9 +1775,6 @@ fn procNamed(s: *const procs.Sampler, name: []const u8) ?*const procs.Proc {
 }
 
 test "a sample looks up names only for processes that are new since the last one" {
-    const sleeper_cmd = "sleep 41.5";
-    const kill_sleeper = "/usr/bin/pkill -f '" ++ sleeper_cmd ++ "'";
-    const let_it_start = "/bin/sleep 0.2";
     const fewest_procs = 20;
     var s: procs.Sampler = .init(gpa, "/");
     defer s.deinit();
@@ -1515,18 +1782,29 @@ test "a sample looks up names only for processes that are new since the last one
     const everyone = s.procs.items.len;
     try std.testing.expect(everyone > fewest_procs);
     try std.testing.expect(s.lookups >= everyone);
-    try std.testing.expectEqual(@as(c_int, 0), system("/bin/" ++ sleeper_cmd ++ " & " ++ let_it_start));
-    defer _ = system(kill_sleeper);
+    var sleeper_pid: c_int = 0;
+    const argv = [_:null]?[*:0]const u8{ "/bin/sleep", "41.5" };
+    const envp = [_:null]?[*:0]const u8{};
+    try std.testing.expectEqual(@as(c_int, 0), posix_spawn(&sleeper_pid, "/bin/sleep", null, null, &argv, &envp));
+    var reaped = false;
+    defer if (!reaped) {
+        _ = kill(sleeper_pid, @intFromEnum(std.c.SIG.KILL));
+        var status: c_int = 0;
+        _ = waitpid(sleeper_pid, &status, 0);
+    };
     const before = s.lookups;
     s.sample(2);
     try std.testing.expect(s.lookups - before < everyone / 4);
     try std.testing.expect(s.lookups - before >= 1);
     const me = s.find(@intCast(std.c.getpid())) orelse return error.NoSelf;
     try std.testing.expectEqualStrings("test", me.name);
-    const sleeper = procNamed(&s, "sleep") orelse return error.NoSleeper;
+    const sleeper = s.find(sleeper_pid) orelse return error.NoSleeper;
+    try std.testing.expectEqualStrings("sleep", sleeper.name);
     try std.testing.expect(sleeper.known);
-    const sleeper_pid = sleeper.pid;
-    try std.testing.expectEqual(@as(c_int, 0), system(kill_sleeper ++ "; " ++ let_it_start));
+    try std.testing.expectEqual(@as(c_int, 0), kill(sleeper_pid, @intFromEnum(std.c.SIG.KILL)));
+    var status: c_int = 0;
+    try std.testing.expectEqual(sleeper_pid, waitpid(sleeper_pid, &status, 0));
+    reaped = true;
     s.sample(4);
     try std.testing.expect(s.find(sleeper_pid) == null);
     try std.testing.expectEqual(s.procs.items.len, s.cache.count());
@@ -1598,7 +1876,7 @@ test "every page draws from this Mac's samples" {
     var tester: ui.Tester = undefined;
     try tester.init(gpa, .init(&a, view), .{});
     defer tester.deinit();
-    tester.resize(wide_w, wide_h);
+    if (std.c.getenv("NANOKEEP_SHOT_MIN") != null) tester.resize(@import("app.zig").min_window_w, @import("app.zig").min_window_h) else tester.resize(wide_w, wide_h);
     const Want = struct { page: @import("app.zig").Page, text: []const u8 };
     const pages = [_]Want{
         .{ .page = .overview, .text = "Memory by Type" },
@@ -1661,6 +1939,110 @@ test "the cleanup page shows a scan as it runs and what it found" {
     try std.testing.expect(a.cleaner.scanned);
     try std.testing.expect(tester.containsText("Clean "));
     try shotTo(&tester, "cleanup-found");
+}
+
+test "a cleanup row opens when its text is clicked" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Library/Caches/com.vendor.big && dd if=/dev/urandom of=Library/Caches/com.vendor.big/blob bs=4096 count=40 2>/dev/null", .{});
+    var a: App = .init(gpa, t.path(), "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.loaded = true;
+    a.cleaner.sync = true;
+    a.sampler.sample(0);
+    a.last = sampled_far_ahead;
+    a.cleaner.scan();
+    a.page = .cleanup;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(wide_w, wide_h);
+    tester.settle(1);
+    try std.testing.expect(!tester.hasText("com.vendor.big"));
+    try std.testing.expect(tester.containsText("1 item"));
+    try std.testing.expect(!tester.containsText("1 items"));
+    try tester.clickText("Apps make them again as they need them");
+    tester.settle(1);
+    try std.testing.expect(a.expanded[@intFromEnum(cleaner.Kind.caches)]);
+    try std.testing.expect(tester.hasText("com.vendor.big"));
+    try shotTo(&tester, "cleanup-open");
+}
+
+test "a process search with no match says so, and Escape drops the selection" {
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.loaded = true;
+    a.sampler.sample(0);
+    a.last = sampled_far_ahead;
+    a.page = .processes;
+    a.query.set("zzqqxx-no-such-process");
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(wide_w, wide_h);
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("No Processes Found"));
+    try shotTo(&tester, "processes-empty");
+    a.query.clear();
+    tester.settle(1);
+    try std.testing.expect(a.table.groups.items.len > 0);
+    a.selected = .{ .group = a.table.groups.items[0].key };
+    tester.settle(1);
+    _ = tester.shortcut(.{ .key = ui.Shortcut.escape });
+    tester.settle(1);
+    try std.testing.expect(a.selected == null);
+}
+
+test "a small window drops the Threads and CPU Time columns to keep names readable" {
+    const app = @import("app.zig");
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.loaded = true;
+    a.sampler.sample(0);
+    a.last = sampled_far_ahead;
+    a.page = .processes;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(app.window_w, app.window_h);
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Threads"));
+    try std.testing.expect(tester.hasText("CPU Time"));
+    tester.resize(app.min_window_w, app.min_window_h);
+    tester.settle(1);
+    try std.testing.expect(!tester.hasText("Threads"));
+    try std.testing.expect(!tester.hasText("CPU Time"));
+    try std.testing.expect(tester.hasText("Memory"));
+    try shotTo(&tester, "processes-min");
+    a.page = .overview;
+    tester.settle(1);
+    try shotTo(&tester, "overview-min");
+}
+
+test "a row in a top list opens that app in Processes" {
+    const items = [_]procs.Proc{
+        .{ .pid = 1, .uid = me_uid, .name = "Busy", .cpu = 80 },
+        .{ .pid = 2, .uid = me_uid, .name = "Idle", .cpu = 1 },
+    };
+    var a: App = .init(gpa, "/", "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.loaded = true;
+    a.last = sampled_far_ahead;
+    try a.everyone.build(&items, .{ .show = .all, .uid = me_uid }, &a.expanded_groups);
+    a.page = .cpu;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(wide_w, wide_h);
+    tester.settle(1);
+    try tester.clickText("Busy");
+    tester.settle(1);
+    try std.testing.expectEqual(@import("app.zig").Page.processes, a.page);
+    try std.testing.expectEqual(a.everyone.groups.items[0].key, a.selected.?.group);
 }
 
 fn shotTo(tester: *ui.Tester, name: []const u8) !void {
@@ -1824,4 +2206,60 @@ test "the bench reads the leak count from the leaks tool's summary" {
     try std.testing.expectEqual(@as(?u64, 0), measure.parseLeaks("Process 7: 0 leaks for 0 total leaked bytes.\n"));
     try std.testing.expectEqual(@as(?u64, 1), measure.parseLeaks("Process 7: 1 leak for 16 total leaked bytes.\n"));
     try std.testing.expectEqual(@as(?u64, null), measure.parseLeaks("leaks[9]: [fatal] unable to read input graph: task_for_pid failed\n"));
+}
+
+test "a search that matches nothing says so on the Apps and Processes pages" {
+    const t = try Tmp.make();
+    defer t.remove();
+    try t.sh("mkdir -p Apps/Fake.app/Contents/MacOS && cp /usr/bin/true Apps/Fake.app/Contents/MacOS/fake && printf '%s' '{s}' > Apps/Fake.app/Contents/Info.plist", .{plist});
+    var ab: [128]u8 = undefined;
+    const dirs = [_][]const u8{try t.sub(&ab, "Apps")};
+    var a: App = .init(gpa, t.path(), "", &dirs);
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.sync = true;
+    a.inventory.load();
+    a.sampler.sample(0);
+    a.last = sampled_far_ahead;
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(wide_w, wide_h);
+    a.page = .apps;
+    tester.settle(1);
+    try std.testing.expect(tester.hasText(fake_name));
+    try std.testing.expect(!tester.hasText("No Apps Found"));
+    a.app_query.set("qqzzxx");
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("No Apps Found"));
+    try std.testing.expect(tester.hasText("Nothing matches “qqzzxx”."));
+    a.page = .processes;
+    tester.settle(1);
+    try std.testing.expect(!tester.hasText("No Processes Found"));
+    a.query.set("qqzzxx");
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("No Processes Found"));
+    try std.testing.expect(tester.hasText("Nothing matches “qqzzxx”."));
+}
+
+test "a memory tile shows its app's name only when the name fits the tile" {
+    const long_name = "AnExtremelyLongHelperProcessName";
+    const items = [_]procs.Proc{
+        .{ .pid = 1, .uid = me_uid, .name = "Big", .memory = 850 << 20 },
+        .{ .pid = 2, .uid = me_uid, .name = long_name, .memory = 150 << 20 },
+    };
+    var a: App = .init(gpa, "/", "", &.{});
+    defer a.deinit();
+    a.clock = fakeClock;
+    a.inventory.loaded = true;
+    a.last = sampled_far_ahead;
+    try a.everyone.build(&items, .{ .show = .all, .uid = me_uid }, &a.expanded_groups);
+    var tester: ui.Tester = undefined;
+    try tester.init(gpa, .init(&a, view), .{});
+    defer tester.deinit();
+    tester.resize(wide_w, wide_h);
+    tester.settle(1);
+    try std.testing.expect(tester.hasText("Memory by App"));
+    try std.testing.expect(tester.hasText("Big"));
+    try std.testing.expect(!tester.hasText(long_name));
 }

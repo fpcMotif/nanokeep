@@ -184,6 +184,11 @@ pub fn memorySlices(m: *const metrics.Memory, th: anytype) [5]card.Slice {
     };
 }
 
+const type_list_w = 140;
+const donut_gap = 16;
+const min_donut = 72;
+const max_donut = 104;
+
 pub fn memoryByType(c: *ui.Context, a: *App) void {
     const m = &a.metrics.memory;
     const box = card.half(c);
@@ -192,11 +197,14 @@ pub fn memoryByType(c: *ui.Context, a: *App) void {
         const h = card.head(c, "memorychip", card.memory_tint, "Memory by Type");
         h.end();
     }
-    const r = ui.div(c).row().wFull().gap(18).itemsCenter();
+    const r = ui.div(c).row().wFull().gap(donut_gap).itemsCenter();
     defer r.end();
     const slices = memorySlices(m, c.theme);
     const used: f32 = @as(f32, @floatFromInt(m.used())) / @as(f32, @floatFromInt(@max(1, m.total)));
-    card.donut(c, 104, &slices, c.print("{d:.0}%", .{used * 100}), "in use");
+    const rect = r.interaction().rect;
+    if (rect == null) c.frameIn(0);
+    const room = (if (rect) |x| x.w else 0) - type_list_w - donut_gap;
+    if (room >= min_donut) card.donut(c, @min(max_donut, room), &slices, c.print("{d:.0}%", .{used * 100}), "in use");
     const list = ui.div(c).column().grow().w(0).gap(1);
     defer list.end();
     const names = [_][]const u8{ "App", "Wired", "Compressed", "Cached", "Free" };
@@ -208,7 +216,7 @@ pub fn memoryByType(c: *ui.Context, a: *App) void {
         defer row.end();
         card.dot(c, 7, s.color);
         {
-            const l = ui.div(c).row().grow().w(0);
+            const l = ui.div(c).row().grow().w(0).clip();
             defer l.end();
             ui.text(c, n, .{ .size = 12 });
         }

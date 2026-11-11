@@ -103,6 +103,7 @@ pub const App = struct {
     app_rows: std.ArrayList(u32) = .empty,
     app_ranks: std.ArrayList(i32) = .empty,
     app_selected: ?usize = null,
+    app_selected_generation: u64 = 0,
     confirm_uninstall: bool = false,
     rebuilds: usize = 0,
     table_key: u64 = 0,
@@ -179,6 +180,7 @@ pub const App = struct {
 
     fn inventoryChanged(ctx: *anyopaque) void {
         const a: *App = @ptrCast(@alignCast(ctx));
+        if (a.app_selected_generation != a.inventory.generation) a.app_selected = null;
         _ = a.usage.apply(a.inventory.apps.items);
         a.apps_version += 1;
         changed(ctx);
@@ -310,6 +312,7 @@ pub const App = struct {
             return;
         }
         a.app_selected = index;
+        a.app_selected_generation = a.inventory.generation;
         a.usage.pick(a.inventory.apps.items[index].path);
     }
 
@@ -464,6 +467,7 @@ pub const App = struct {
 
     pub fn selectedApp(a: *App) ?*apps.AppInfo {
         const i = a.app_selected orelse return null;
+        if (a.inventory.listing != null or a.app_selected_generation != a.inventory.generation) return null;
         if (i >= a.inventory.apps.items.len) return null;
         return &a.inventory.apps.items[i];
     }

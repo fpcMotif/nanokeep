@@ -87,9 +87,19 @@ fn isSkipped(name: []const u8) bool {
 }
 
 pub fn isClean(gpa: std.mem.Allocator, path: []const u8) bool {
-    const st = run.capture(gpa, &.{ git, "-C", path, "status", "--porcelain" }) catch return false;
+    const st = run.capture(gpa, &.{ git, "-C", path, "status", "--porcelain", "--untracked-files=normal" }) catch return false;
     defer st.deinit(gpa);
     return st.code == 0 and std.mem.trim(u8, st.out, " \n").len == 0;
+}
+
+pub fn headIsReferenced(gpa: std.mem.Allocator, path: []const u8) bool {
+    const refs = run.capture(gpa, &.{ git, "-C", path, "for-each-ref", "--count=1", "--contains", "HEAD" }) catch return false;
+    defer refs.deinit(gpa);
+    return refs.code == 0 and std.mem.trim(u8, refs.out, " \n").len > 0;
+}
+
+pub fn isRemovable(gpa: std.mem.Allocator, path: []const u8) bool {
+    return isClean(gpa, path) and headIsReferenced(gpa, path);
 }
 
 pub fn find(gpa: std.mem.Allocator, home: []const u8) !std.ArrayList(Found) {
@@ -125,7 +135,7 @@ pub fn find(gpa: std.mem.Allocator, home: []const u8) !std.ArrayList(Found) {
         for (entries[1..]) |e| {
             if (e.locked or e.prunable or e.bare) continue;
             const path = try gpa.dupeSentinel(u8, e.path, 0);
-            if (access(path, F_OK) != 0 or !isClean(gpa, path)) {
+            if (access(path, F_OK) != 0 or !isRemovable(gpa, path)) {
                 gpa.free(path);
                 continue;
             }

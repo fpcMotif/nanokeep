@@ -119,7 +119,7 @@ fn hero(c: *ui.Context, a: *App) void {
                 .idle => "Scan to see what can be cleaned.",
                 .scanning => "Looking through caches, logs and temporary files…",
                 .cleaning => "Moving what you chose to the Trash…",
-                .found => c.print("{s} chosen · {d} items", .{ view.size(c, cl.selectedBytes()), cl.selectedItems() }),
+                .found => c.print("{s} chosen · {d} {s}", .{ view.size(c, cl.selectedBytes()), cl.selectedItems(), if (cl.selectedItems() == 1) "item" else "items" }),
             };
             ui.text(c, sub, .{ .size = 12.5, .color = th.muted });
         }
@@ -225,7 +225,10 @@ fn diskMap(c: *ui.Context, a: *App) void {
     if (scanning) c.frameIn(1.0 / 14.0);
     const legend = ui.div(c).row().wFull().gap(16).clip();
     defer legend.end();
-    for (&cl.cats) |*cat| legendItem(c, .hex(cat.spec.color), cat.spec.title, if (cat.measured or cat.bytes() > 0) cat.bytes() else null);
+    for (&cl.cats) |*cat| {
+        if (cl.scanned and cat.bytes() == 0) continue;
+        legendItem(c, .hex(cat.spec.color), cat.spec.title, if (cat.measured or cat.bytes() > 0) cat.bytes() else null);
+    }
     legendItem(c, th.muted.alpha(0.5), "Other files", null);
     legendItem(c, th.muted.alpha(0.25), c.print("Free {s}", .{view.size(c, sy.disk_free)}), null);
 }
@@ -290,19 +293,24 @@ fn category(c: *ui.Context, a: *App, cat: *cleaner.Category, i: usize, row: usiz
     defer box.end();
     const size = cat.bytes();
     {
-        const r = ui.div(c).row().wFull().h(31).px(8).gap(8).itemsCenter();
-        defer r.end();
         const ready = !pending and size > 0;
-        if (table.chevron(c, a.expanded[i], ready and cat.items().len > 0)) {
-            a.expanded[i] = !a.expanded[i];
-            c.changed = true;
-        }
+        const opens = ready and cat.items().len > 0;
+        var r = ui.div(c).row().wFull().h(31).px(8).gap(8).itemsCenter().rounded(8);
+        if (opens) r = r.control().hover(th.text.alpha(0.04));
+        defer r.end();
+        var toggled = opens and r.interaction().clicked;
+        if (table.chevron(c, a.expanded[i], opens)) toggled = true;
         if (ready) {
             if (table.check(c, cat.selected, true)) {
                 cat.selected = !cat.selected;
+                toggled = false;
                 c.changed = true;
             }
         } else _ = c.leaf(.{ .width = .{ .px = 16 } }, .none, null);
+        if (toggled) {
+            a.expanded[i] = !a.expanded[i];
+            c.changed = true;
+        }
         {
             const color = ui.Color.hex(spec.color);
             const badge = ui.div(c).row().w(18).h(18).center().rounded(5).bg(color.alpha(0.16));
@@ -371,7 +379,7 @@ pub fn dialog(c: *ui.Context, a: *App) void {
     const cl = &a.cleaner;
     const forever = cl.selectedForever();
     const desc = if (forever)
-        "Caches, logs and other files move to the Trash. Git removes clean worktrees, and what is already in the Trash is deleted for good."
+        "Caches, logs and other files move to the Trash. Git removes clean worktrees with their ignored files, and what is already in the Trash is deleted for good."
     else
         "The files move to the Trash. Apps make their caches again as they need them.";
     if (kit.dialog(c, "clean", &a.confirm_clean, .{ .title = c.print("Clean {s}?", .{procs.bytes(&b, cl.selectedBytes())}), .description = desc, .ok = "Clean", .ok_variant = if (forever) .danger else .primary })) |d| {

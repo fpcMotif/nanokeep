@@ -1,3 +1,4 @@
+const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const kit = nanoui.kit;
@@ -32,7 +33,7 @@ pub fn page(c: *ui.Context, a: *App) void {
             c.print("{d} apps · {s}", .{ inv.apps.items.len, view.size(c, inv.total()) });
         const h = view.header(c, "Apps", sub);
         defer h.end();
-        if (ui.textField(c, &a.app_query, .{ .placeholder = "Search", .width = .{ .px = 160 }, .size = 12 }).changed) a.orderApps();
+        if (ui.textField(c, &a.app_query, .{ .placeholder = "Search", .width = .{ .px = if (view.narrow(c)) 104 else 160 }, .size = 12 }).changed) a.orderApps();
         if (ui.button(c, "Reload", .{ .size = 12, .icon = "arrow.clockwise", .disabled = inv.measuring != null }).clicked) {
             a.app_selected = null;
             inv.load();
@@ -49,6 +50,11 @@ pub fn page(c: *ui.Context, a: *App) void {
     }
     table.line(c);
     const now = a.now();
+    const query = std.mem.trim(u8, a.app_query.text(), " ");
+    if (a.app_rows.items.len == 0 and query.len > 0) {
+        @import("view_card.zig").emptyList(c, "magnifyingglass", "No Apps Found", c.print("Nothing matches “{s}”.", .{query}));
+        return;
+    }
     var rows = ui.list(c, .{ .count = a.app_rows.items.len, .row_height = table.row_h, .padding = .{ .left = 8, .right = 8 } });
     while (rows.next()) |i| row(c, a, a.app_rows.items[i], i, now);
     rows.end();
@@ -61,7 +67,8 @@ fn row(c: *ui.Context, a: *App, index: u32, i: usize, now: i64) void {
     ui.key(c, info.path);
     const sel = a.app_selected == index;
     const bg = if (sel) th.accent.alpha(0.2) else if (i % 2 == 1) th.surface_hover.alpha(0.45) else th.background.alpha(0);
-    const d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
+    var d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
+    if (!sel) d = d.hover(th.surface_hover);
     defer d.end();
     if (d.clicked()) {
         a.selectApp(index);

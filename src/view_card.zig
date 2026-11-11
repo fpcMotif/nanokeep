@@ -170,15 +170,18 @@ pub const ChartOptions = struct {
     pad: f32 = 10,
 };
 
+const unmeasured_chart_w = 160;
+
 pub fn chart(c: *ui.Context, a: *App, key: []const u8, tint: u24, series: []const Series, opts: ChartOptions) void {
     const th = c.theme;
     const color = ui.Color.hex(tint);
     ui.key(c, key);
-    const panel = ui.div(c).column().wFull().p(opts.pad).gap(6).rounded(10).bg(color.alpha(0.09));
+    const panel = ui.div(c).column().wFull().p(opts.pad).gap(6).rounded(10).bg(color.alpha(0.09)).clip();
     defer panel.end();
     const grid = ui.div(c).column().wFull().gap(opts.gap);
     const rect = grid.interaction().rect;
-    const width = if (rect) |r| r.w else 400;
+    if (rect == null) c.frameIn(0);
+    const width = if (rect) |r| r.w else unmeasured_chart_w;
     const cols: usize = @intFromFloat(@max(8, @floor((width + opts.gap) / (opts.dot + opts.gap))));
     const h = &a.metrics.history;
     const now = if (h.last()) |s| s.t else 0;
@@ -274,7 +277,7 @@ pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tin
         const h = head(c, icon, tint, title);
         defer h.end();
         ui.key(c, "show-all");
-        const link = ui.div(c).row().gap(3).itemsCenter().control();
+        const link = ui.div(c).row().h(24).px(8).gap(3).itemsCenter().rounded(7).control().hover(ui.Color.hex(tint).alpha(0.1));
         defer link.end();
         if (link.clicked()) {
             a.page = .processes;
@@ -297,13 +300,21 @@ pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tin
         while (i < n) : (i += 2) {
             const g = &a.everyone.groups.items[idx[i]];
             ui.key(c, c.print("top-{d}", .{g.key}));
-            const r = ui.div(c).row().wFull().h(30).gap(8).itemsCenter();
+            const r = ui.div(c).row().wFull().h(30).gap(8).itemsCenter().control();
             defer r.end();
+            if (r.clicked()) {
+                a.page = .processes;
+                a.show = @intFromEnum(groups.Show.all);
+                a.sort = sort;
+                a.reversed = false;
+                a.selected = .{ .group = g.key };
+            }
+            const hot = r.hovered();
             appGlyph(c, g, 18);
             {
                 const name = ui.div(c).row().grow().w(0).gap(6).itemsCenter().clip();
                 defer name.end();
-                ui.text(c, g.name, .{ .size = 12.5 });
+                ui.text(c, g.name, .{ .size = 12.5, .color = if (hot) ui.Color.hex(tint) else th.text });
                 if (g.count > 1) ui.text(c, c.print("{d}", .{g.count}), .{ .size = 10.5, .color = th.muted });
             }
             ui.text(c, valueText(c, g, m), .{ .size = 12.5, .weight = .semibold });
@@ -311,10 +322,13 @@ pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tin
     }
 }
 
+const three_row_treemap_h = 120;
+const labelled_tile_w = 72;
+
 pub fn treemap(c: *ui.Context, a: *App, height: f32) void {
     const th = c.theme;
     var idx: [9]u32 = undefined;
-    const n = top(a, .memory, &idx);
+    const n = top(a, .memory, idx[0..if (height < three_row_treemap_h) 8 else idx.len]);
     const list = a.everyone.groups.items;
     const lead: usize = @min(n, 4);
     const r = ui.div(c).row().wFull().h(height).gap(6);
@@ -347,11 +361,15 @@ fn tile(c: *ui.Context, g: *const groups.Group, weight: f32, tall: bool) void {
     const t = ui.div(c).column().w(0).hFull().p(8).gap(2).rounded(9).bg(th.background).clip();
     c.node(t.index).style.grow = weight;
     defer t.end();
+    const it = t.interaction();
+    const rect = it.rect;
+    if (rect == null) c.frameIn(0);
+    var b: [32]u8 = undefined;
+    kit.tooltip(c, it, c.print("{s}, {s}", .{ g.name, procs.bytes(&b, g.memory) }), .{});
     appGlyph(c, g, 16);
     ui.spacer(c);
-    if (!tall) return;
+    if (!tall or (rect orelse return).w < labelled_tile_w) return;
     ui.text(c, g.name, .{ .size = 11.5, .weight = .semibold });
-    var b: [32]u8 = undefined;
     ui.text(c, c.print("{s}", .{procs.bytes(&b, g.memory)}), .{ .size = 10.5, .color = th.muted });
 }
 
@@ -385,6 +403,15 @@ pub fn energyRows(c: *ui.Context, a: *App, count: usize) void {
     if (n == 0) ui.text(c, "Measuring…", .{ .size = 12, .color = th.muted });
 }
 
+pub fn emptyList(c: *ui.Context, icon: []const u8, title: []const u8, hint: []const u8) void {
+    const th = c.theme;
+    const box = ui.div(c).column().wFull().grow().center().gap(6);
+    defer box.end();
+    ui.icon(c, icon, .{ .size = 26, .color = th.muted.alpha(0.6) });
+    ui.text(c, title, .{ .size = 14, .weight = .semibold });
+    ui.text(c, hint, .{ .size = 12, .color = th.muted });
+}
+
 pub fn pageHeader(c: *ui.Context, a: *App, title: []const u8, sub: []const u8, ranged: bool) void {
     const view = @import("view.zig");
     const h = view.header(c, title, sub);
@@ -400,5 +427,6 @@ pub fn pageHeader(c: *ui.Context, a: *App, title: []const u8, sub: []const u8, r
 }
 
 pub fn pauseButton(c: *ui.Context, a: *App) void {
+    if (!a.live) ui.text(c, "Paused", .{ .size = 12, .weight = .semibold, .color = c.theme.muted });
     if (kit.iconButton(c, if (a.live) "pause.fill" else "play.fill", .{ .size = .sm, .variant = .secondary, .pill = true, .tooltip = if (a.live) "Pause Updates" else "Resume Updates" }).clicked) a.live = !a.live;
 }
