@@ -749,6 +749,23 @@ test "the sampler reads this machine" {
     try std.testing.expect(s.system.disk_total > s.system.disk_free);
 }
 
+test "thread counts are read only on the pages that show them, and at once when one opens" {
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.page = .overview;
+    _ = a.tick(10);
+    const me = a.sampler.self_pid;
+    try std.testing.expectEqual(@as(u32, 0), a.sampler.find(me).?.threads);
+    try std.testing.expectEqual(@as(u64, 0), a.sampler.system.threads);
+    a.page = .processes;
+    _ = a.tick(10.5);
+    try std.testing.expectEqual(@as(usize, 2), a.sampler.samples);
+    try std.testing.expect(a.sampler.find(me).?.threads >= 1);
+    a.page = .cpu;
+    _ = a.tick(10.6);
+    try std.testing.expectEqual(@as(usize, 2), a.sampler.samples);
+}
+
 test "processes group under their outermost app" {
     try std.testing.expectEqualStrings("/Applications/Zed.app", procs.outerBundle("/Applications/Zed.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"));
     try std.testing.expectEqualStrings("", procs.outerBundle("/usr/libexec/logd"));

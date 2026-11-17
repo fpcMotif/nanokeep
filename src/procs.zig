@@ -222,6 +222,7 @@ pub const Sampler = struct {
     prev_all: u64 = 0,
     samples: usize = 0,
     lookups: usize = 0,
+    count_threads: bool = true,
     num: u64 = 0,
     den: u64 = 1,
     pids: []c_int = &.{},
@@ -287,7 +288,7 @@ pub const Sampler = struct {
                 p.memory = ru.phys_footprint;
                 p.cpu_time_ns = t;
                 p.known = true;
-                if (proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti, @sizeOf(TaskInfo)) == @sizeOf(TaskInfo)) p.threads = @intCast(@max(0, ti.threadnum));
+                if (s.count_threads and proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti, @sizeOf(TaskInfo)) == @sizeOf(TaskInfo)) p.threads = @intCast(@max(0, ti.threadnum));
                 if (s.samples > 0 and wall > 0) if (k.prev) |before| {
                     const wall_ns = wall * std.time.ns_per_s;
                     p.cpu = @floatCast(@as(f64, @floatFromInt(t -| before.time_ns)) / wall_ns * percent);

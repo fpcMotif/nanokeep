@@ -202,8 +202,15 @@ pub const App = struct {
         a.toaster.push(.{ .status = if (r.failed > 0) .warning else .success, .title = if (r.failed > 0) "Cleaned, with some left" else "Cleaned", .message = text });
     }
 
+    fn showsThreads(a: *const App) bool {
+        return a.page == .processes or a.page == .cpu;
+    }
+
     pub fn tick(a: *App, t: f64) f32 {
         a.settleQuits(t);
+        const wanted = a.showsThreads();
+        if (wanted and !a.sampler.count_threads) a.last = never_sampled;
+        a.sampler.count_threads = wanted;
         if (a.live and t - a.last >= interval) a.sample(t);
         a.refresh();
         const wait = @max(min_wait, interval - (t - a.last));
