@@ -65,9 +65,12 @@ pub const Table = struct {
     members: std.ArrayList(u32) = .empty,
     rows: std.ArrayList(Row) = .empty,
     ranks: std.ArrayList(i32) = .empty,
+    keys: std.ArrayList(u64) = .empty,
+    hashes: usize = 0,
     shown: usize = 0,
 
     pub fn deinit(t: *Table) void {
+        t.keys.deinit(t.gpa);
         t.ranks.deinit(t.gpa);
         t.groups.deinit(t.gpa);
         t.members.deinit(t.gpa);
@@ -82,27 +85,31 @@ pub const Table = struct {
         var picked: std.ArrayList(u32) = .empty;
         defer picked.deinit(t.gpa);
         try t.ranks.resize(t.gpa, items.len);
+        try t.keys.resize(t.gpa, items.len);
         for (items, 0..) |*p, i| {
             if (!shown(p, o)) continue;
             t.ranks.items[i] = 0;
             if (o.query.len > 0) t.ranks.items[i] = match(p, o.query) orelse continue;
+            t.keys.items[i] = keyOf(p);
+            t.hashes += 1;
             try picked.append(t.gpa, @intCast(i));
         }
         t.shown = picked.items.len;
         const Ctx = struct {
             items: []const Proc,
+            keys: []const u64,
             o: Options,
             fn lt(c: @This(), a: u32, b: u32) bool {
-                const ka = keyOf(&c.items[a]);
-                const kb = keyOf(&c.items[b]);
+                const ka = c.keys[a];
+                const kb = c.keys[b];
                 if (ka != kb) return ka < kb;
                 return before(c.items[a].cpu, c.items[a].memory, c.items[b].cpu, c.items[b].memory, c.o);
             }
         };
-        std.mem.sort(u32, picked.items, Ctx{ .items = items, .o = o }, Ctx.lt);
+        std.mem.sort(u32, picked.items, Ctx{ .items = items, .keys = t.keys.items, .o = o }, Ctx.lt);
         for (picked.items) |i| {
             const p = &items[i];
-            const k = keyOf(p);
+            const k = t.keys.items[i];
             if (t.groups.items.len == 0 or t.groups.items[t.groups.items.len - 1].key != k) {
                 try t.groups.append(t.gpa, .{
                     .key = k,

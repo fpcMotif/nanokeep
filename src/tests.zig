@@ -832,6 +832,24 @@ test "searching processes ranks groups by match, and a picked app wins a tie" {
     try std.testing.expectEqualStrings("zsh", t.groups.items[0].name);
 }
 
+test "a table build hashes each shown process once per build" {
+    const zed = "/Applications/Zed.app";
+    const items = [_]procs.Proc{
+        .{ .pid = 10, .uid = me_uid, .name = "Zed", .bundle = zed, .memory = 300 },
+        .{ .pid = 11, .uid = me_uid, .name = "Zed Helper", .bundle = zed, .memory = 200 },
+        .{ .pid = 12, .uid = me_uid, .name = "zsh", .memory = 100 },
+        .{ .pid = 13, .uid = me_uid + 1, .name = "other", .memory = 50 },
+    };
+    var t: groups.Table = .{ .gpa = gpa };
+    defer t.deinit();
+    const none: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    try t.build(&items, .{ .show = .mine, .uid = me_uid }, &none);
+    try std.testing.expectEqual(@as(usize, 3), t.hashes);
+    try std.testing.expectEqual(@as(usize, 2), t.groups.items.len);
+    try t.build(&items, .{ .show = .mine, .uid = me_uid }, &none);
+    try std.testing.expectEqual(@as(usize, 6), t.hashes);
+}
+
 fn expectApps(a: *const App, names: []const []const u8) !void {
     errdefer for (a.app_rows.items) |r| std.debug.print("  app {s}\n", .{a.inventory.apps.items[r].name});
     try std.testing.expectEqual(names.len, a.app_rows.items.len);
