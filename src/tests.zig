@@ -37,6 +37,7 @@ extern "c" fn popen(cmd: [*:0]const u8, mode: [*:0]const u8) ?*anyopaque;
 extern "c" fn pclose(f: *anyopaque) c_int;
 extern "c" fn fread(buf: [*]u8, size: usize, n: usize, f: *anyopaque) usize;
 extern "c" fn time(t: ?*i64) i64;
+extern "c" fn getppid() c_int;
 
 const gpa = std.testing.allocator;
 
@@ -597,6 +598,40 @@ test "quitting refuses itself and other users' processes" {
     try s.quit(mine, .quit, record);
     try std.testing.expectEqualSlices([2]c_int, &.{ .{ mine, @intFromEnum(std.c.SIG.KILL) }, .{ mine, @intFromEnum(std.c.SIG.TERM) } }, sent.items);
     try std.testing.expectError(error.Failed, s.quit(mine, .quit, refuse));
+}
+
+test "quitting refuses loginwindow, which would end the login session" {
+    defer sent.clearAndFree(gpa);
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    s.sample(1);
+    const window = procNamed(&s, "loginwindow") orelse return error.SkipZigTest;
+    if (window.uid != s.uid) return error.SkipZigTest;
+    const pid = window.pid;
+    try std.testing.expectError(error.Protected, s.quit(pid, .quit, record));
+    try std.testing.expectError(error.Protected, s.quit(pid, .force, record));
+    try std.testing.expectEqual(@as(usize, 0), sent.items.len);
+    const copy = 4243;
+    try s.procs.append(gpa, .{ .pid = copy, .uid = s.uid, .name = "loginwindow", .bundle = "/Users/someone/Applications/loginwindow.app" });
+    try s.quit(copy, .quit, record);
+    try std.testing.expectEqual(@as(usize, 1), sent.items.len);
+}
+
+test "quitting signals nothing when the pid now names a different process" {
+    defer sent.clearAndFree(gpa);
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    s.sample(1);
+    const parent = getppid();
+    const p = s.find(parent) orelse return error.SkipZigTest;
+    if (p.uid != s.uid) return error.SkipZigTest;
+    const known = s.cache.getPtr(parent) orelse return error.SkipZigTest;
+    if (known.start == 0) return error.SkipZigTest;
+    try s.quit(parent, .quit, record);
+    try std.testing.expectEqual(@as(usize, 1), sent.items.len);
+    known.start += 1;
+    try std.testing.expectError(error.Gone, s.quit(parent, .quit, record));
+    try std.testing.expectEqual(@as(usize, 1), sent.items.len);
 }
 
 test "the sampler reads this machine" {

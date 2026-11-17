@@ -175,7 +175,24 @@ pub const System = struct {
 
 pub const Signal = enum(c_int) { quit = @intFromEnum(std.c.SIG.TERM), force = @intFromEnum(std.c.SIG.KILL) };
 
-pub const QuitError = error{ NotYours, Itself, Failed };
+pub const QuitError = error{ NotYours, Itself, Failed, Protected, Gone };
+
+const system_root = "/System/";
+const session_apps = [_][]const u8{"loginwindow.app"};
+
+pub fn endsSession(p: *const Proc) bool {
+    if (p.pid <= 1) return true;
+    if (!std.mem.startsWith(u8, p.bundle, system_root)) return false;
+    const app = std.fs.path.basename(p.bundle);
+    for (session_apps) |b| if (std.mem.eql(u8, app, b)) return true;
+    return false;
+}
+
+pub fn sameProcess(pid: i32, start: u64, uuid: [16]u8) bool {
+    var ru: Rusage = undefined;
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) != 0) return false;
+    return ru.proc_start_abstime == start and std.mem.eql(u8, &ru.uuid, &uuid);
+}
 
 const Prev = struct { time_ns: u64, disk: u64, energy: u64 };
 
@@ -367,10 +384,16 @@ pub const Sampler = struct {
         return false;
     }
 
-    pub fn quit(s: *const Sampler, pid: i32, sig: Signal, send: *const fn (c_int, c_int) callconv(.c) c_int) QuitError!void {
+    pub fn mayQuit(s: *const Sampler, pid: i32) QuitError!void {
         if (pid == s.self_pid) return error.Itself;
-        const p = s.find(pid) orelse return error.Failed;
+        const p = s.find(pid) orelse return error.Gone;
         if (p.uid != s.uid) return error.NotYours;
+        if (endsSession(p)) return error.Protected;
+        if (s.cache.get(pid)) |k| if (k.start != 0 and !sameProcess(pid, k.start, k.uuid)) return error.Gone;
+    }
+
+    pub fn quit(s: *const Sampler, pid: i32, sig: Signal, send: *const fn (c_int, c_int) callconv(.c) c_int) QuitError!void {
+        try s.mayQuit(pid);
         if (send(pid, @intFromEnum(sig)) != 0) return error.Failed;
     }
 };

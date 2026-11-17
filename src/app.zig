@@ -343,11 +343,14 @@ pub const App = struct {
         var failed: usize = 0;
         var why: []const u8 = "";
         for (pids.items) |pid| a.sampler.quit(pid, if (a.force) .force else .quit, a.send) catch |err| {
+            if (err == error.Gone) continue;
             failed += 1;
             why = switch (err) {
                 error.NotYours => "It belongs to another user.",
                 error.Itself => "nanokeep can't quit itself here.",
                 error.Failed => "The process didn't take the signal.",
+                error.Protected => "macOS needs it running. Quitting it would log you out.",
+                error.Gone => unreachable,
             };
         };
         var msg: [160]u8 = undefined;
