@@ -18,6 +18,18 @@ pub const hidden_interval = 10.0;
 const min_wait = 0.05;
 const second_sample_after = 0.6;
 const max_awake = 32;
+pub const quit_grace = 5.0;
+pub const quit_poll = 0.1;
+const max_leaving = 8;
+
+pub const Leaving = struct {
+    pid: i32,
+    start: u64,
+    force: bool,
+    selection: Selection,
+    since: ?f64 = null,
+    name: [48]u8 = @splat(0),
+};
 pub const never_sampled = -std.math.inf(f64);
 const no_selection = "the process";
 
@@ -101,6 +113,10 @@ pub const App = struct {
     clock: ?*const fn () f64 = null,
     send: *const fn (c_int, c_int) callconv(.c) c_int = procs.sendKill,
     trash_app: cleaner.TrashFn = nanoui.shell.trash,
+    terminate_app: *const fn (i32, []const u8) bool = terminateApp,
+    alive: *const fn (i32, u64) bool = procs.alive,
+    leaving: [max_leaving]Leaving = undefined,
+    leaving_count: usize = 0,
     guide: ?fda.Guide = null,
     access_fn: *const fn (*App) void = beginGuide,
 
@@ -187,9 +203,39 @@ pub const App = struct {
     }
 
     pub fn tick(a: *App, t: f64) f32 {
+        a.settleQuits(t);
         if (a.live and t - a.last >= interval) a.sample(t);
         a.refresh();
-        return @floatCast(@max(min_wait, interval - (t - a.last)));
+        const wait = @max(min_wait, interval - (t - a.last));
+        return @floatCast(if (a.leaving_count > 0) @min(wait, quit_poll) else wait);
+    }
+
+    fn settleQuits(a: *App, t: f64) void {
+        var i: usize = 0;
+        while (i < a.leaving_count) {
+            const l = &a.leaving[i];
+            const since = l.since orelse t;
+            l.since = since;
+            const gone = !a.alive(l.pid, l.start);
+            if (!gone and t - since < quit_grace) {
+                i += 1;
+                continue;
+            }
+            if (gone) a.last = never_sampled else a.stillRunning(l.*);
+            a.leaving[i] = a.leaving[a.leaving_count - 1];
+            a.leaving_count -= 1;
+        }
+    }
+
+    fn stillRunning(a: *App, l: Leaving) void {
+        const name = std.mem.sliceTo(&l.name, 0);
+        var msg: [160]u8 = undefined;
+        if (l.force) {
+            a.toaster.push(.{ .status = .danger, .title = std.fmt.bufPrint(&msg, "Couldn't force quit {s}", .{name}) catch "Couldn't force quit", .message = "macOS did not stop it." });
+            return;
+        }
+        a.toaster.push(.{ .status = .warning, .title = std.fmt.bufPrint(&msg, "{s} is still running", .{name}) catch "Still running", .message = "It may be asking you to save. Force Quit stops it at once.", .duration = 8 });
+        if (a.selected == null) a.selected = l.selection;
     }
 
     pub fn heartbeat(a: *App, t: f64) void {
@@ -337,22 +383,33 @@ pub const App = struct {
     pub fn quitSelected(a: *App) void {
         var pids: std.ArrayList(i32) = .empty;
         defer pids.deinit(a.gpa);
+        var parents: std.ArrayList(i32) = .empty;
+        defer parents.deinit(a.gpa);
         a.quitTargets(&pids);
         if (pids.items.len == 0) return;
+        const sel = a.selected orelse return;
         const name = a.selectionName();
+        for (pids.items) |pid| parents.append(a.gpa, a.sampler.parentOf(pid)) catch return;
+        procs.rootsFirst(pids.items, parents.items);
         var failed: usize = 0;
         var why: []const u8 = "";
-        for (pids.items) |pid| a.sampler.quit(pid, if (a.force) .force else .quit, a.send) catch |err| {
-            if (err == error.Gone) continue;
-            failed += 1;
-            why = switch (err) {
-                error.NotYours => "It belongs to another user.",
-                error.Itself => "nanokeep can't quit itself here.",
-                error.Failed => "The process didn't take the signal.",
-                error.Protected => "macOS needs it running. Quitting it would log you out.",
-                error.Gone => unreachable,
-            };
+        var lead: ?i32 = if (a.force) null else a.askApp(sel.group, pids.items);
+        if (lead == null) for (pids.items) |pid| {
+            if (a.sampler.quit(pid, if (a.force) .force else .quit, a.send)) |_| {
+                if (lead == null) lead = pid;
+            } else |err| {
+                if (err == error.Gone) continue;
+                failed += 1;
+                why = switch (err) {
+                    error.NotYours => "It belongs to another user.",
+                    error.Itself => "nanokeep can't quit itself here.",
+                    error.Failed => "The process didn't take the signal.",
+                    error.Protected => "macOS needs it running. Quitting it would log you out.",
+                    error.Gone => unreachable,
+                };
+            }
         };
+        if (lead) |pid| a.expectExit(pid, sel, name);
         var msg: [160]u8 = undefined;
         if (failed > 0) {
             const title = if (pids.items.len == 1) std.fmt.bufPrint(&msg, "Couldn't quit {s}", .{name}) else std.fmt.bufPrint(&msg, "Couldn't quit {d} of {d}", .{ failed, pids.items.len });
@@ -361,6 +418,25 @@ pub const App = struct {
             a.toaster.push(.{ .status = .success, .title = std.fmt.bufPrint(&msg, "{s} {s}", .{ if (a.force) "Force quit" else "Asked to quit", name }) catch "Quit" });
         }
         a.selected = null;
+    }
+
+    fn askApp(a: *App, group: u64, pids: []const i32) ?i32 {
+        const g = a.table.group(group) orelse return null;
+        if (g.bundle.len == 0) return null;
+        for (pids) |pid| {
+            a.sampler.mayQuit(pid) catch continue;
+            if (a.terminate_app(pid, g.bundle)) return pid;
+        }
+        return null;
+    }
+
+    fn expectExit(a: *App, pid: i32, sel: Selection, name: []const u8) void {
+        if (a.leaving_count == a.leaving.len) return;
+        var l: Leaving = .{ .pid = pid, .start = a.sampler.startOf(pid), .force = a.force, .selection = sel };
+        const n = @min(name.len, l.name.len - 1);
+        @memcpy(l.name[0..n], name[0..n]);
+        a.leaving[a.leaving_count] = l;
+        a.leaving_count += 1;
     }
 
     pub fn requestAccess(a: *App) void {
@@ -409,3 +485,13 @@ pub const App = struct {
 };
 
 const no_expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
+
+fn terminateApp(pid: i32, bundle: []const u8) bool {
+    const objc = nanoui.objc;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const running = objc.msg(?objc.Object, objc.class("NSRunningApplication"), "runningApplicationWithProcessIdentifier:", .{@as(c_int, pid)}) orelse return false;
+    const url = objc.msg(?objc.Object, running, "bundleURL", .{}) orelse return false;
+    if (!std.mem.eql(u8, objc.fromNSString(objc.msg(?objc.Object, url, "path", .{})), bundle)) return false;
+    return objc.msg(objc.BOOL, running, "terminate", .{});
+}

@@ -634,6 +634,106 @@ test "quitting signals nothing when the pid now names a different process" {
     try std.testing.expectEqual(@as(usize, 1), sent.items.len);
 }
 
+const chrome = "/Applications/Google Chrome.app";
+const chrome_main = 7001;
+const chrome_helper = 7002;
+var asked: std.ArrayList(i32) = .empty;
+var still_alive = true;
+
+fn askChromeMain(pid: i32, bundle: []const u8) bool {
+    asked.append(gpa, pid) catch return false;
+    return pid == chrome_main and std.mem.eql(u8, bundle, chrome);
+}
+
+fn notAnApp(_: i32, _: []const u8) bool {
+    return false;
+}
+
+fn fakeAlive(_: i32, _: u64) bool {
+    return still_alive;
+}
+
+fn quitApp(a: *App) !void {
+    a.live = false;
+    a.send = record;
+    a.alive = fakeAlive;
+    try a.sampler.procs.append(gpa, .{ .pid = chrome_helper, .uid = a.sampler.uid, .name = "Google Chrome Helper", .bundle = chrome, .memory = 300, .known = true });
+    try a.sampler.procs.append(gpa, .{ .pid = chrome_main, .uid = a.sampler.uid, .name = "Google Chrome", .bundle = chrome, .memory = 100, .known = true });
+    a.order();
+    a.selected = .{ .group = a.table.groups.items[0].key };
+}
+
+test "quit asks an app's main process the AppKit way and signals no helper" {
+    defer sent.clearAndFree(gpa);
+    defer asked.clearAndFree(gpa);
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    try quitApp(&a);
+    a.terminate_app = askChromeMain;
+    a.quitSelected();
+    try std.testing.expectEqual(@as(usize, 0), sent.items.len);
+    try std.testing.expectEqual(@as(i32, chrome_main), asked.items[asked.items.len - 1]);
+    try std.testing.expectEqual(@as(usize, 1), a.leaving_count);
+    try std.testing.expectEqual(@as(i32, chrome_main), a.leaving[0].pid);
+}
+
+test "quit signals a process that is not an app, and force quit never asks" {
+    defer sent.clearAndFree(gpa);
+    defer asked.clearAndFree(gpa);
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    try quitApp(&a);
+    a.terminate_app = notAnApp;
+    a.quitSelected();
+    try std.testing.expectEqual(@as(usize, 2), sent.items.len);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(std.c.SIG.TERM)), sent.items[0][1]);
+    sent.clearRetainingCapacity();
+    a.selected = .{ .group = a.table.groups.items[0].key };
+    a.terminate_app = askChromeMain;
+    asked.clearRetainingCapacity();
+    a.force = true;
+    a.quitSelected();
+    try std.testing.expectEqual(@as(usize, 0), asked.items.len);
+    try std.testing.expectEqual(@as(usize, 2), sent.items.len);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(std.c.SIG.KILL)), sent.items[0][1]);
+}
+
+test "a group's root process comes first when its processes are signalled" {
+    var pids = [_]i32{ 5, 3, 9 };
+    var parents = [_]i32{ 3, 1, 5 };
+    procs.rootsFirst(&pids, &parents);
+    try std.testing.expectEqual(@as(i32, 3), pids[0]);
+    try std.testing.expectEqual(@as(i32, 1), parents[0]);
+}
+
+test "a quit is forgotten when the process exits, and offered for Force Quit when it stays" {
+    const app = @import("app.zig");
+    defer sent.clearAndFree(gpa);
+    defer asked.clearAndFree(gpa);
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    try quitApp(&a);
+    a.terminate_app = askChromeMain;
+    const chosen = a.selected.?;
+    still_alive = true;
+    defer still_alive = true;
+    a.quitSelected();
+    try std.testing.expect(a.selected == null);
+    try std.testing.expect(a.tick(100) <= app.quit_poll);
+    try std.testing.expectEqual(@as(usize, 1), a.leaving_count);
+    _ = a.tick(100 + app.quit_grace + 0.1);
+    try std.testing.expectEqual(@as(usize, 0), a.leaving_count);
+    try std.testing.expectEqual(chosen.group, a.selected.?.group);
+
+    a.quitSelected();
+    a.last = 100;
+    still_alive = false;
+    _ = a.tick(200);
+    try std.testing.expectEqual(@as(usize, 0), a.leaving_count);
+    try std.testing.expect(a.selected == null);
+    try std.testing.expectEqual(app.never_sampled, a.last);
+}
+
 test "the sampler reads this machine" {
     var s: procs.Sampler = .init(gpa, "/");
     defer s.deinit();

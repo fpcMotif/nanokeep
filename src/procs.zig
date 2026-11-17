@@ -379,6 +379,14 @@ pub const Sampler = struct {
         return null;
     }
 
+    pub fn startOf(s: *const Sampler, pid: i32) u64 {
+        return if (s.cache.get(pid)) |k| k.start else 0;
+    }
+
+    pub fn parentOf(s: *const Sampler, pid: i32) i32 {
+        return if (s.cache.get(pid)) |k| @intCast(k.ppid) else 0;
+    }
+
     pub fn running(s: *const Sampler, bundle: []const u8) bool {
         for (s.procs.items) |p| if (std.mem.eql(u8, p.bundle, bundle)) return true;
         return false;
@@ -400,6 +408,22 @@ pub const Sampler = struct {
 
 pub fn sendKill(pid: c_int, sig: c_int) callconv(.c) c_int {
     return kill(pid, sig);
+}
+
+pub fn alive(pid: i32, start: u64) bool {
+    var ru: Rusage = undefined;
+    if (proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) != 0) return false;
+    return start == 0 or ru.proc_start_abstime == start;
+}
+
+pub fn rootsFirst(pids: []i32, parents: []i32) void {
+    var roots: usize = 0;
+    for (0..pids.len) |i| {
+        if (std.mem.indexOfScalar(i32, pids, parents[i]) != null) continue;
+        std.mem.swap(i32, &pids[roots], &pids[i]);
+        std.mem.swap(i32, &parents[roots], &parents[i]);
+        roots += 1;
+    }
 }
 
 pub fn displayName(path: []const u8) []const u8 {
