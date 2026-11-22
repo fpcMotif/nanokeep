@@ -145,24 +145,28 @@ pub const Machine = struct {
     }
 
     fn askProfiler(m: *Machine) void {
-        const out = run.capture(std.heap.smp_allocator, &.{ "/usr/sbin/system_profiler", "SPHardwareDataType", "-json" }) catch return;
-        defer out.deinit(std.heap.smp_allocator);
-        const name = jsonField(out.out, "machine_name") orelse return;
-        const owned = std.heap.smp_allocator.dupe(u8, name) catch return;
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
         const Done = struct {
             m: *Machine,
-            name: []u8,
+            name: []const u8,
+            arena: std.heap.ArenaAllocator,
             fn apply(ctx: ?*anyopaque) callconv(.c) void {
                 const d: *@This() = @ptrCast(@alignCast(ctx));
                 d.m.name.set(d.name);
                 if (d.m.on_change) |n| n.func(n.ctx);
-                std.heap.smp_allocator.free(d.name);
-                std.heap.smp_allocator.destroy(d);
+                var owner = d.arena;
+                owner.deinit();
             }
         };
-        const d = std.heap.smp_allocator.create(Done) catch return std.heap.smp_allocator.free(owned);
-        d.* = .{ .m = m, .name = owned };
-        objc.dispatchMain(d, Done.apply);
+        const ok = found: {
+            const out = run.capture(arena.allocator(), &.{ "/usr/sbin/system_profiler", "SPHardwareDataType", "-json" }) catch break :found false;
+            const name = jsonField(out.out, "machine_name") orelse break :found false;
+            const d = arena.allocator().create(Done) catch break :found false;
+            d.* = .{ .m = m, .name = name, .arena = arena };
+            objc.dispatchMain(d, Done.apply);
+            break :found true;
+        };
+        if (!ok) arena.deinit();
     }
 };
 

@@ -25,12 +25,15 @@ pub const cached_color = 0x98989d;
 pub const read_color = 0x32ade6;
 pub const write_color = 0xff9500;
 
+pub const radius = 18;
+pub const lift: ui.Shadow = .{ .color = .{ .a = 0.055 }, .blur = 20, .y = 6 };
+
 pub fn card(c: *ui.Context) ui.Div {
-    return ui.div(c).column().wFull().p(16).gap(12).rounded(14).bg(c.theme.surface);
+    return ui.div(c).column().wFull().p(16).gap(12).rounded(radius).bg(c.theme.surface).shadow(lift);
 }
 
 pub fn half(c: *ui.Context) ui.Div {
-    return ui.div(c).column().grow().w(0).p(16).gap(12).rounded(14).bg(c.theme.surface);
+    return ui.div(c).column().grow().w(0).p(16).gap(12).rounded(radius).bg(c.theme.surface).shadow(lift);
 }
 
 pub fn pair(c: *ui.Context) ui.Div {

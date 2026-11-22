@@ -4,14 +4,39 @@ const procs = @import("procs.zig");
 const groups = @import("groups.zig");
 const cleaner = @import("cleaner.zig");
 const apps = @import("apps.zig");
+const fuzzy = @import("fuzzy.zig");
 const fda = @import("fda.zig");
 const metrics = @import("metrics.zig");
 const machine = @import("machine.zig");
 const iokit = @import("iokit.zig");
+const usage = @import("usage.zig");
 
 extern "c" fn time(t: ?*i64) i64;
 
 pub const interval = 2.0;
+pub const hidden_interval = 10.0;
+const min_wait = 0.05;
+const second_sample_after = 0.6;
+const max_awake = 32;
+pub const quit_grace = 5.0;
+pub const quit_poll = 0.1;
+const max_leaving = 8;
+
+pub const Leaving = struct {
+    pid: i32,
+    start: u64,
+    force: bool,
+    selection: Selection,
+    since: ?f64 = null,
+    name: [48]u8 = @splat(0),
+};
+pub const never_sampled = -std.math.inf(f64);
+const no_selection = "the process";
+
+pub const window_w = 1100;
+pub const window_h = 720;
+pub const min_window_w = 860;
+pub const min_window_h = 520;
 
 pub const Page = enum { overview, processes, cpu, memory, gpu, disk, network, energy, apps, cleanup, about };
 
@@ -23,10 +48,10 @@ pub const Range = enum {
 
     pub fn seconds(r: Range) f64 {
         return switch (r) {
-            .m1 => 60,
-            .m5 => 300,
-            .m15 => 900,
-            .h1 => 3600,
+            .m1 => std.time.s_per_min,
+            .m5 => 5 * std.time.s_per_min,
+            .m15 => 15 * std.time.s_per_min,
+            .h1 => std.time.s_per_hour,
         };
     }
 
@@ -53,15 +78,16 @@ pub const App = struct {
     everyone: groups.Table,
     metrics: metrics.Metrics,
     machine: machine.Machine = .{},
+    usage: usage.Ledger,
     toaster: nanoui.kit.Toaster,
     page: Page = .overview,
     range: Range = .h1,
-    awake: [32]iokit.Assertion = undefined,
+    awake: [max_awake]iokit.Assertion = undefined,
     awake_count: usize = 0,
     show_serial: bool = false,
     live: bool = true,
-    last: f64 = -1e9,
-    show: usize = 2,
+    last: f64 = never_sampled,
+    show: usize = @intFromEnum(groups.Show.mine),
     sort: groups.Sort = .memory,
     reversed: bool = false,
     query: nanoui.ui.TextBuffer = .{},
@@ -75,12 +101,22 @@ pub const App = struct {
     app_sort: AppSort = .name,
     app_reversed: bool = false,
     app_rows: std.ArrayList(u32) = .empty,
+    app_ranks: std.ArrayList(i32) = .empty,
     app_selected: ?usize = null,
     confirm_uninstall: bool = false,
+    rebuilds: usize = 0,
+    table_key: u64 = 0,
+    apps_key: u64 = 0,
+    apps_version: u64 = 0,
+    expanded_version: u64 = 0,
     window: ?*nanoui.Window = null,
     clock: ?*const fn () f64 = null,
     send: *const fn (c_int, c_int) callconv(.c) c_int = procs.sendKill,
-    trash_app: cleaner.TrashFn = trashPath,
+    trash_app: cleaner.TrashFn = nanoui.shell.trash,
+    terminate_app: *const fn (i32, []const u8) bool = terminateApp,
+    alive: *const fn (i32, u64) bool = procs.alive,
+    leaving: [max_leaving]Leaving = undefined,
+    leaving_count: usize = 0,
     guide: ?fda.Guide = null,
     access_fn: *const fn (*App) void = beginGuide,
 
@@ -93,13 +129,14 @@ pub const App = struct {
             .table = .{ .gpa = gpa },
             .everyone = .{ .gpa = gpa },
             .metrics = .init(),
+            .usage = .{ .gpa = gpa, .home = home },
             .toaster = .{ .gpa = gpa },
         };
     }
 
     pub fn listen(a: *App) void {
         a.cleaner.on_change = .{ .ctx = a, .func = changed };
-        a.inventory.on_change = .{ .ctx = a, .func = changed };
+        a.inventory.on_change = .{ .ctx = a, .func = inventoryChanged };
         a.machine.on_change = .{ .ctx = a, .func = redraw };
     }
 
@@ -109,9 +146,12 @@ pub const App = struct {
         a.metrics.deinit();
         a.everyone.deinit();
         a.app_rows.deinit(a.gpa);
+        a.app_ranks.deinit(a.gpa);
         a.expanded_groups.deinit(a.gpa);
         a.table.deinit();
         a.toaster.deinit();
+        if (a.usage.dirty) a.usage.save() catch {};
+        a.usage.deinit();
         a.inventory.deinit();
         a.cleaner.deinit();
         a.sampler.deinit();
@@ -125,6 +165,23 @@ pub const App = struct {
         const a: *App = @ptrCast(@alignCast(ctx));
         a.reportClean();
         if (a.window) |w| w.redraw();
+    }
+
+    fn noteUsage(a: *App) void {
+        const t = a.now();
+        a.usage.observe(a.sampler.procs.items, t);
+        if (a.usage.apply(a.inventory.apps.items) and a.app_sort == .opened) a.apps_version += 1;
+        if (a.usage.dirty and t - a.usage.saved_at >= usage.save_every) {
+            a.usage.save() catch {};
+            a.usage.saved_at = t;
+        }
+    }
+
+    fn inventoryChanged(ctx: *anyopaque) void {
+        const a: *App = @ptrCast(@alignCast(ctx));
+        _ = a.usage.apply(a.inventory.apps.items);
+        a.apps_version += 1;
+        changed(ctx);
     }
 
     fn redraw(ctx: *anyopaque) void {
@@ -145,28 +202,115 @@ pub const App = struct {
         a.toaster.push(.{ .status = if (r.failed > 0) .warning else .success, .title = if (r.failed > 0) "Cleaned, with some left" else "Cleaned", .message = text });
     }
 
+    fn showsThreads(a: *const App) bool {
+        return a.page == .processes or a.page == .cpu;
+    }
+
     pub fn tick(a: *App, t: f64) f32 {
-        if (a.live and t - a.last >= interval) {
-            a.sampler.sample(t);
-            a.metrics.sample(t, a.sampler.system.power);
-            a.awake_count = iokit.assertions(&a.awake);
-            a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
-            a.last = t;
-            if (a.sampler.samples == 1) a.last = t - interval + 0.6;
+        a.settleQuits(t);
+        const wanted = a.showsThreads();
+        if (wanted and !a.sampler.count_threads) a.last = never_sampled;
+        a.sampler.count_threads = wanted;
+        if (a.live and t - a.last >= interval) a.sample(t);
+        a.refresh();
+        const wait = @max(min_wait, interval - (t - a.last));
+        return @floatCast(if (a.leaving_count > 0) @min(wait, quit_poll) else wait);
+    }
+
+    fn settleQuits(a: *App, t: f64) void {
+        var i: usize = 0;
+        while (i < a.leaving_count) {
+            const l = &a.leaving[i];
+            const since = l.since orelse t;
+            l.since = since;
+            const gone = !a.alive(l.pid, l.start);
+            if (!gone and t - since < quit_grace) {
+                i += 1;
+                continue;
+            }
+            if (gone) a.last = never_sampled else a.stillRunning(l.*);
+            a.leaving[i] = a.leaving[a.leaving_count - 1];
+            a.leaving_count -= 1;
         }
-        a.order();
-        return @floatCast(@max(0.05, interval - (t - a.last)));
+    }
+
+    fn stillRunning(a: *App, l: Leaving) void {
+        const name = std.mem.sliceTo(&l.name, 0);
+        var msg: [160]u8 = undefined;
+        if (l.force) {
+            a.toaster.push(.{ .status = .danger, .title = std.fmt.bufPrint(&msg, "Couldn't force quit {s}", .{name}) catch "Couldn't force quit", .message = "macOS did not stop it." });
+            return;
+        }
+        a.toaster.push(.{ .status = .warning, .title = std.fmt.bufPrint(&msg, "{s} is still running", .{name}) catch "Still running", .message = "It may be asking you to save. Force Quit stops it at once.", .duration = 8 });
+        if (a.selected == null) a.selected = l.selection;
+    }
+
+    pub fn heartbeat(a: *App, t: f64) void {
+        if (a.live and t - a.last >= hidden_interval) a.sample(t);
+    }
+
+    fn sample(a: *App, t: f64) void {
+        a.sampler.sample(t);
+        a.metrics.sample(t, a.sampler.system.power);
+        a.awake_count = iokit.assertions(&a.awake);
+        a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
+        a.noteUsage();
+        a.last = t;
+        if (a.sampler.samples == 1) a.last = t - interval + second_sample_after;
+    }
+
+    pub fn refresh(a: *App) void {
+        if (a.tableKey() != a.table_key) a.order();
+        if (a.appsKey() != a.apps_key) a.orderApps();
+    }
+
+    fn tableKey(a: *const App) u64 {
+        var h: std.hash.Wyhash = .init(0);
+        h.update(std.mem.asBytes(&[_]u64{ a.sampler.samples, a.sampler.procs.items.len, a.show, @intFromEnum(a.sort), @intFromBool(a.reversed), a.expanded_version }));
+        h.update(std.mem.trim(u8, a.query.text(), " "));
+        return h.final();
+    }
+
+    fn appsKey(a: *const App) u64 {
+        var h: std.hash.Wyhash = .init(0);
+        const q = std.mem.trim(u8, a.app_query.text(), " ");
+        const runs = if (q.len > 0) a.usage.runs else 0;
+        h.update(std.mem.asBytes(&[_]u64{ a.apps_version, @intFromEnum(a.app_sort), @intFromBool(a.app_reversed), runs }));
+        h.update(q);
+        return h.final();
     }
 
     pub fn order(a: *App) void {
+        a.rebuilds += 1;
+        a.table_key = a.tableKey();
         a.table.build(a.sampler.procs.items, .{
             .show = @enumFromInt(a.show),
             .sort = a.sort,
             .reversed = a.reversed,
             .query = std.mem.trim(u8, a.query.text(), " "),
             .uid = a.sampler.uid,
+            .ledger = &a.usage,
+            .now = a.now(),
         }, &a.expanded_groups) catch {};
-        a.orderApps();
+    }
+
+    pub fn selectRow(a: *App, g: *const groups.Group, pid: ?i32) void {
+        const s: Selection = .{ .group = g.key, .pid = pid };
+        if (a.selected != null and std.meta.eql(a.selected.?, s)) {
+            a.selected = null;
+            return;
+        }
+        a.selected = s;
+        a.usage.pick(g.bundle);
+    }
+
+    pub fn selectApp(a: *App, index: usize) void {
+        if (a.app_selected == index) {
+            a.app_selected = null;
+            return;
+        }
+        a.app_selected = index;
+        a.usage.pick(a.inventory.apps.items[index].path);
     }
 
     pub fn sortBy(a: *App, s: groups.Sort) void {
@@ -177,22 +321,30 @@ pub const App = struct {
     }
 
     pub fn toggleGroup(a: *App, key: u64) void {
+        a.expanded_version += 1;
         if (a.expanded_groups.remove(key)) return;
         a.expanded_groups.put(a.gpa, key, {}) catch {};
     }
 
     pub fn orderApps(a: *App) void {
+        a.rebuilds += 1;
+        a.apps_key = a.appsKey();
         a.app_rows.clearRetainingCapacity();
         const q = std.mem.trim(u8, a.app_query.text(), " ");
-        for (a.inventory.apps.items, 0..) |info, i| {
-            if (q.len > 0 and std.ascii.findIgnoreCase(info.name, q) == null) continue;
+        a.app_ranks.resize(a.gpa, a.inventory.apps.items.len) catch return;
+        const t = a.now();
+        for (a.inventory.apps.items, a.app_ranks.items, 0..) |info, *rank, i| {
+            rank.* = 0;
+            if (q.len > 0) rank.* = (fuzzy.score(q, info.name) orelse continue) + a.usage.boost(info.path, t);
             a.app_rows.append(a.gpa, @intCast(i)) catch return;
         }
         const Ctx = struct {
             list: []const apps.AppInfo,
+            ranks: []const i32,
             sort: AppSort,
             reversed: bool,
             fn lt(c: @This(), x: u32, y: u32) bool {
+                if (c.ranks[x] != c.ranks[y]) return c.ranks[x] > c.ranks[y];
                 const p = c.list[x];
                 const q2 = c.list[y];
                 const ord: std.math.Order = switch (c.sort) {
@@ -207,7 +359,7 @@ pub const App = struct {
                 return if (c.reversed) ord == .gt else ord == .lt;
             }
         };
-        std.mem.sort(u32, a.app_rows.items, Ctx{ .list = a.inventory.apps.items, .sort = a.app_sort, .reversed = a.app_reversed }, Ctx.lt);
+        std.mem.sort(u32, a.app_rows.items, Ctx{ .list = a.inventory.apps.items, .ranks = a.app_ranks.items, .sort = a.app_sort, .reversed = a.app_reversed }, Ctx.lt);
     }
 
     pub fn sortAppsBy(a: *App, s: AppSort) void {
@@ -229,28 +381,42 @@ pub const App = struct {
     }
 
     pub fn selectionName(a: *App) []const u8 {
-        const sel = a.selected orelse return "the process";
+        const sel = a.selected orelse return no_selection;
         if (sel.pid) |pid| if (a.sampler.find(pid)) |p| return p.name;
         if (a.table.group(sel.group)) |g| return g.name;
-        return "the process";
+        return no_selection;
     }
 
     pub fn quitSelected(a: *App) void {
         var pids: std.ArrayList(i32) = .empty;
         defer pids.deinit(a.gpa);
+        var parents: std.ArrayList(i32) = .empty;
+        defer parents.deinit(a.gpa);
         a.quitTargets(&pids);
         if (pids.items.len == 0) return;
+        const sel = a.selected orelse return;
         const name = a.selectionName();
+        for (pids.items) |pid| parents.append(a.gpa, a.sampler.parentOf(pid)) catch return;
+        procs.rootsFirst(pids.items, parents.items);
         var failed: usize = 0;
         var why: []const u8 = "";
-        for (pids.items) |pid| a.sampler.quit(pid, if (a.force) .force else .quit, a.send) catch |err| {
-            failed += 1;
-            why = switch (err) {
-                error.NotYours => "It belongs to another user.",
-                error.Itself => "nanokeep can't quit itself here.",
-                error.Failed => "The process didn't take the signal.",
-            };
+        var lead: ?i32 = if (a.force) null else a.askApp(sel.group, pids.items);
+        if (lead == null) for (pids.items) |pid| {
+            if (a.sampler.quit(pid, if (a.force) .force else .quit, a.send)) |_| {
+                if (lead == null) lead = pid;
+            } else |err| {
+                if (err == error.Gone) continue;
+                failed += 1;
+                why = switch (err) {
+                    error.NotYours => "It belongs to another user.",
+                    error.Itself => "nanokeep can't quit itself here.",
+                    error.Failed => "The process didn't take the signal.",
+                    error.Protected => "macOS needs it running. Quitting it would log you out.",
+                    error.Gone => unreachable,
+                };
+            }
         };
+        if (lead) |pid| a.expectExit(pid, sel, name);
         var msg: [160]u8 = undefined;
         if (failed > 0) {
             const title = if (pids.items.len == 1) std.fmt.bufPrint(&msg, "Couldn't quit {s}", .{name}) else std.fmt.bufPrint(&msg, "Couldn't quit {d} of {d}", .{ failed, pids.items.len });
@@ -259,6 +425,25 @@ pub const App = struct {
             a.toaster.push(.{ .status = .success, .title = std.fmt.bufPrint(&msg, "{s} {s}", .{ if (a.force) "Force quit" else "Asked to quit", name }) catch "Quit" });
         }
         a.selected = null;
+    }
+
+    fn askApp(a: *App, group: u64, pids: []const i32) ?i32 {
+        const g = a.table.group(group) orelse return null;
+        if (g.bundle.len == 0) return null;
+        for (pids) |pid| {
+            a.sampler.mayQuit(pid) catch continue;
+            if (a.terminate_app(pid, g.bundle)) return pid;
+        }
+        return null;
+    }
+
+    fn expectExit(a: *App, pid: i32, sel: Selection, name: []const u8) void {
+        if (a.leaving_count == a.leaving.len) return;
+        var l: Leaving = .{ .pid = pid, .start = a.sampler.startOf(pid), .force = a.force, .selection = sel };
+        const n = @min(name.len, l.name.len - 1);
+        @memcpy(l.name[0..n], name[0..n]);
+        a.leaving[a.leaving_count] = l;
+        a.leaving_count += 1;
     }
 
     pub fn requestAccess(a: *App) void {
@@ -308,6 +493,12 @@ pub const App = struct {
 
 const no_expanded: std.AutoHashMapUnmanaged(u64, void) = .empty;
 
-fn trashPath(path: []const u8) bool {
-    return nanoui.shell.trash(path);
+fn terminateApp(pid: i32, bundle: []const u8) bool {
+    const objc = nanoui.objc;
+    const pool = objc.Pool.push();
+    defer pool.pop();
+    const running = objc.msg(?objc.Object, objc.class("NSRunningApplication"), "runningApplicationWithProcessIdentifier:", .{@as(c_int, pid)}) orelse return false;
+    const url = objc.msg(?objc.Object, running, "bundleURL", .{}) orelse return false;
+    if (!std.mem.eql(u8, objc.fromNSString(objc.msg(?objc.Object, url, "path", .{})), bundle)) return false;
+    return objc.msg(objc.BOOL, running, "terminate", .{});
 }

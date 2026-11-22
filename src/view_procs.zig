@@ -79,7 +79,7 @@ fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
         }
     } else _ = c.leaf(.{ .width = .{ .px = 18 } }, .none, null);
     if (it.clicked and !c.changed) {
-        a.selected = if (sel) null else .{ .group = g.key, .pid = if (p) |pp| pp.pid else null };
+        a.selectRow(g, if (p) |pp| pp.pid else null);
         c.changed = true;
     }
     if (it.double_clicked and p == null and g.count > 1) a.toggleGroup(g.key);
@@ -126,7 +126,7 @@ pub fn dialog(c: *ui.Context, a: *App) void {
     const title = if (a.force)
         (if (many) c.print("Force quit {s} ({d} processes)?", .{ name, pids.items.len }) else c.print("Force quit {s}?", .{name}))
     else if (many) c.print("Quit {s} ({d} processes)?", .{ name, pids.items.len }) else c.print("Quit {s}?", .{name});
-    const desc = if (a.force) "It stops at once. Unsaved changes are lost." else "It is asked to quit, as Quit in its menu does.";
+    const desc = if (a.force) "It stops at once. Unsaved changes are lost." else "An app is asked to quit, as Quit in its menu does. Other processes get a terminate signal and can lose unsaved work.";
     if (kit.dialog(c, "quit", &a.confirm_quit, .{ .title = title, .description = desc, .ok = if (a.force) "Force Quit" else "Quit", .ok_variant = if (a.force) .danger else .primary })) |d| {
         if (d.end() == .ok) a.quitSelected();
     }

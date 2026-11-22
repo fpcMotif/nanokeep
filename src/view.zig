@@ -1,7 +1,6 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
-const kit = nanoui.kit;
 const procs = @import("procs.zig");
 const metrics = @import("metrics.zig");
 const app_mod = @import("app.zig");
@@ -38,18 +37,40 @@ pub fn ago(c: *ui.Context, now: i64, then: i64) []const u8 {
     return c.print("{s}", .{procs.ago(&b, now, then)});
 }
 
-pub fn view(a: *App, c: *ui.Context) void {
+pub const apple_gold = 0xd4a85a;
+
+fn brighten(c: *ui.Context) void {
+    const fonts = .{ c.theme.font, c.theme.mono_font };
+    c.theme = .light;
+    c.theme.font = fonts[0];
+    c.theme.mono_font = fonts[1];
+    c.theme.background = .hex(0xf6f6f9);
+    c.theme.border = .hex(0xe5e5ea);
+    c.theme.surface_hover = .hex(0xefeff4);
     c.theme.accent = .hex(accent);
     c.theme.accent_hover = .hex(0xe23a80);
     c.theme.accent_text = .white;
+}
+
+fn aurora(c: *ui.Context) void {
+    const blobs = [_]struct { x: f32, y: f32, d: f32, color: u24, a: f32 }{
+        .{ .x = -90, .y = -60, .d = 300, .color = accent, .a = 0.30 },
+        .{ .x = 70, .y = 220, .d = 260, .color = 0x5ac8fa, .a = 0.28 },
+        .{ .x = -60, .y = 470, .d = 320, .color = apple_gold, .a = 0.34 },
+        .{ .x = 120, .y = 700, .d = 240, .color = 0xaf52de, .a = 0.20 },
+    };
+    for (blobs) |b| _ = c.leaf(.{ .absolute = true, .offset = .{ .x = b.x, .y = b.y }, .width = .{ .px = b.d }, .height = .{ .px = b.d }, .radius = b.d / 2, .background = ui.Color.hex(b.color).alpha(b.a) }, .none, null);
+}
+
+pub fn view(a: *App, c: *ui.Context) void {
+    brighten(c);
     c.frameIn(a.tick(if (a.clock) |f| f() else c.time));
     keys(c, a);
     const th = c.theme;
     {
-        const root = ui.div(c).row().sizeFull().bg(th.background);
+        const root = ui.div(c).row().sizeFull().bg(th.background).clip();
         defer root.end();
         sidebar(c, a);
-        _ = c.leaf(.{ .width = .{ .px = 1 }, .height = .fill, .background = th.border }, .none, null);
         const main = ui.div(c).column().grow().w(0).hFull().clip();
         defer main.end();
         switch (a.page) {
@@ -84,7 +105,12 @@ fn sidebar(c: *ui.Context, a: *App) void {
     const th = c.theme;
     const m = &a.metrics;
     var b: [32]u8 = undefined;
-    const side = ui.div(c).column().w(220).hFull().px(10).pt(14).pb(12).gap(1).bg(th.surface);
+    const frame = ui.div(c).column().w(232).hFull().p(10);
+    defer frame.end();
+    const backdrop = ui.div(c).column().wFull().grow().rounded(20).clip();
+    defer backdrop.end();
+    aurora(c);
+    const side = ui.div(c).column().wFull().grow().px(8).pt(12).pb(12).gap(1).rounded(20).glass(.{});
     defer side.end();
     navItem(c, a, .overview, "square.grid.2x2", 0x636366, "Overview", "");
     navItem(c, a, .processes, "list.bullet", 0x8e8e93, "Processes", c.print("{d}", .{a.sampler.procs.items.len}));
@@ -117,8 +143,8 @@ fn navItem(c: *ui.Context, a: *App, page: app_mod.Page, icon: []const u8, tint: 
     const th = c.theme;
     const on = a.page == page;
     ui.key(c, title);
-    var d = ui.div(c).row().wFull().h(30).px(8).gap(9).itemsCenter().rounded(8).control();
-    d = if (on) d.bg(th.accent) else d.hover(th.surface_hover);
+    var d = ui.div(c).row().wFull().h(30).px(8).gap(9).itemsCenter().rounded(10).control();
+    d = if (on) d.bg(th.accent.alpha(0.14)) else d.hover(th.text.alpha(0.05));
     defer d.end();
     if (d.clicked()) {
         a.page = page;
@@ -129,9 +155,9 @@ fn navItem(c: *ui.Context, a: *App, page: app_mod.Page, icon: []const u8, tint: 
         defer badge.end();
         ui.icon(c, icon, .{ .size = 11, .color = .white });
     }
-    ui.text(c, title, .{ .size = 13, .color = if (on) th.accent_text else th.text });
+    ui.text(c, title, .{ .size = 13, .weight = if (on) .semibold else .regular, .color = if (on) th.accent else th.text });
     ui.spacer(c);
-    if (figure.len > 0) ui.text(c, figure, .{ .size = 11, .mono = true, .color = if (on) th.accent_text else th.muted });
+    if (figure.len > 0) ui.text(c, figure, .{ .size = 11, .mono = true, .color = if (on) th.accent else th.muted });
 }
 
 pub fn header(c: *ui.Context, title: []const u8, sub: []const u8) ui.Div {
@@ -165,7 +191,7 @@ const Tile = struct {
 fn tile(c: *ui.Context, a: *App, t: Tile) void {
     const th = c.theme;
     ui.key(c, t.title);
-    const box = ui.div(c).column().grow().w(0).p(16).gap(10).rounded(14).bg(th.surface).control();
+    const box = ui.div(c).column().grow().w(0).p(16).gap(10).rounded(card.radius).bg(th.surface).shadow(card.lift).control();
     defer box.end();
     if (box.clicked()) a.page = t.page;
     {
@@ -317,7 +343,7 @@ fn since(a: *App) f64 {
 fn cleanupCard(c: *ui.Context, a: *App) void {
     const th = c.theme;
     var b: [32]u8 = undefined;
-    const box = ui.div(c).row().wFull().p(16).gap(12).itemsCenter().rounded(14).bg(th.surface);
+    const box = ui.div(c).row().wFull().p(16).gap(12).itemsCenter().rounded(card.radius).bg(th.surface).shadow(card.lift);
     defer box.end();
     {
         const badge = ui.div(c).row().w(36).h(36).center().rounded(10).bg(ui.Color.hex(0xff9f0a).alpha(0.16));

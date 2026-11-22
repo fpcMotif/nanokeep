@@ -113,10 +113,14 @@ pub const NetBytes = struct { in: u64 = 0, out: u64 = 0 };
 extern "c" fn sysctl(name: [*]const c_int, len: c_uint, old: ?*anyopaque, oldlen: *usize, new: ?*const anyopaque, newlen: usize) c_int;
 
 pub fn netBytes(gpa: std.mem.Allocator) NetBytes {
-    const mib = [_]c_int{ 4, 17, 0, 0, 6, 0 };
+    const CTL_NET = 4;
+    const PF_ROUTE = 17;
+    const NET_RT_IFLIST2 = 6;
+    const growth_room = 4096;
+    const mib = [_]c_int{ CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0 };
     var len: usize = 0;
     if (sysctl(&mib, mib.len, null, &len, null, 0) != 0 or len == 0) return .{};
-    const buf = gpa.alloc(u8, len + 4096) catch return .{};
+    const buf = gpa.alloc(u8, len + growth_room) catch return .{};
     defer gpa.free(buf);
     var got = buf.len;
     if (sysctl(&mib, mib.len, buf.ptr, &got, null, 0) != 0) return .{};
@@ -127,16 +131,21 @@ pub fn sumInterfaces(buf: []const u8) NetBytes {
     const RTM_IFINFO2 = 0x12;
     const IFF_UP = 0x1;
     const IFF_LOOPBACK = 0x8;
+    const type_at = 3;
+    const flags_at = 8;
+    const ibytes_at = 96;
+    const obytes_at = 104;
+    const min_len = obytes_at + @sizeOf(u64);
     var out: NetBytes = .{};
     var off: usize = 0;
-    while (off + 112 <= buf.len) {
+    while (off + min_len <= buf.len) {
         const msglen = std.mem.readInt(u16, buf[off..][0..2], .little);
         if (msglen == 0) break;
-        if (buf[off + 3] == RTM_IFINFO2 and off + msglen <= buf.len) {
-            const flags = std.mem.readInt(i32, buf[off + 8 ..][0..4], .little);
+        if (buf[off + type_at] == RTM_IFINFO2 and off + msglen <= buf.len) {
+            const flags = std.mem.readInt(i32, buf[off + flags_at ..][0..4], .little);
             if (flags & IFF_UP != 0 and flags & IFF_LOOPBACK == 0) {
-                out.in += std.mem.readInt(u64, buf[off + 96 ..][0..8], .little);
-                out.out += std.mem.readInt(u64, buf[off + 104 ..][0..8], .little);
+                out.in += std.mem.readInt(u64, buf[off + ibytes_at ..][0..8], .little);
+                out.out += std.mem.readInt(u64, buf[off + obytes_at ..][0..8], .little);
             }
         }
         off += msglen;
@@ -265,7 +274,9 @@ pub const Metrics = struct {
         m.disk.read_total = d.read;
         m.disk.written_total = d.written;
         m.prev_disk = d;
-        const n = netBytes(std.heap.smp_allocator);
+        var net_arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        const n = netBytes(net_arena.allocator());
+        net_arena.deinit();
         if (!first and wall > 0) {
             m.net.in = @floatCast(@as(f64, @floatFromInt(n.in -| m.prev_net.in)) / wall);
             m.net.out = @floatCast(@as(f64, @floatFromInt(n.out -| m.prev_net.out)) / wall);
@@ -399,9 +410,9 @@ pub fn watts(buf: []u8, w: f32) []const u8 {
 
 pub fn uptime(buf: []u8, seconds: i64) []const u8 {
     const s: u64 = @intCast(@max(0, seconds));
-    const d = s / 86400;
-    const h = (s / 3600) % 24;
-    const m = (s / 60) % 60;
+    const d = s / std.time.s_per_day;
+    const h = (s % std.time.s_per_day) / std.time.s_per_hour;
+    const m = (s % std.time.s_per_hour) / std.time.s_per_min;
     if (d > 0) return std.fmt.bufPrint(buf, "{d}d {d}h", .{ d, h }) catch "?";
     if (h > 0) return std.fmt.bufPrint(buf, "{d}h {d}m", .{ h, m }) catch "?";
     return std.fmt.bufPrint(buf, "{d}m", .{m}) catch "?";

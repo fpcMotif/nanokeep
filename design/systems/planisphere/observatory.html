@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planisphere Observatory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,500;1,6..96,500&family=Space+Mono:wght@400;700&family=Work+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --sky: #05110f;
+  --sky-raised: #0a1e1b;
+  --sky-deep: #020807;
+  --glass: rgb(10 30 27 / .72);
+  --constellation: #13d2c1;
+  --aurora: #55d48b;
+  --moonlight: #cde4df;
+  --dust: #5e7a74;
+  --nova: #ff7a59;
+  --hairline: #1c3833;
+  --u: 3px;
+  --display: "Bodoni Moda", serif;
+  --body: "Work Sans", sans-serif;
+  --mono: "Space Mono", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--sky-deep);
+  color: var(--moonlight);
+  font: 400 14px/1.6 var(--body);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--constellation); outline-offset: 3px; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.label { font: 600 10.5px/1 var(--body); letter-spacing: .24em; text-transform: uppercase; color: var(--dust); }
+.hot { color: var(--nova); }
+
+#app { display: grid; grid-template-columns: 96px 1fr; grid-template-rows: 48px 1fr 36px; height: 100vh; }
+#dust { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+#app > * { position: relative; z-index: 1; }
+
+.telemetry {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 27px; padding: 0 21px;
+  border-bottom: 1px solid var(--hairline); background: rgb(2 8 7 / .7); backdrop-filter: blur(12px);
+  font: 11px var(--mono); color: var(--dust); white-space: nowrap; overflow: hidden;
+}
+.telemetry b { color: var(--moonlight); font-weight: 400; }
+.telemetry .brand { font: italic 500 19px var(--display); color: var(--constellation); letter-spacing: -.01em; }
+.telemetry .spacer { flex: 1; }
+.epoch { border: 1px solid var(--constellation); color: var(--constellation); border-radius: 9999px; padding: 3px 12px; }
+.kbd { border: 1px solid var(--hairline); border-radius: 9999px; padding: 3px 12px; color: var(--moonlight); }
+
+nav.rail {
+  border-right: 1px solid var(--hairline); background: rgb(10 30 27 / .55); backdrop-filter: blur(12px);
+  display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 21px 0;
+  z-index: 4;
+}
+.orbit { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--hairline); position: relative; display: grid; place-items: center; transition: border-color .2s, box-shadow .2s; }
+.orbit svg { width: 18px; height: 18px; stroke: var(--dust); fill: none; stroke-width: 1.5; transition: stroke .2s; }
+.orbit .moon { position: absolute; width: 7px; height: 7px; border-radius: 50%; left: 50%; top: 50%; margin: -3.5px; background: var(--c, var(--dust)); transform: rotate(var(--a, 0deg)) translateY(-24px); transition: transform .9s cubic-bezier(.2,.8,.2,1); box-shadow: 0 0 6px var(--c, transparent); }
+.orbit:hover { border-color: var(--dust); }
+.orbit[aria-current="page"] { border-color: var(--constellation); box-shadow: 0 0 21px rgb(19 210 193 / .35), inset 0 0 12px rgb(19 210 193 / .2); }
+.orbit[aria-current="page"] svg { stroke: var(--constellation); }
+.orbit .tip { position: absolute; left: 60px; white-space: nowrap; background: var(--sky-raised); border: 1px solid var(--hairline); border-radius: 9999px; padding: 3px 12px; font: 600 10.5px var(--body); letter-spacing: .2em; text-transform: uppercase; opacity: 0; pointer-events: none; transform: translateX(-6px); transition: .15s; z-index: 5; }
+.orbit:hover .tip { opacity: 1; transform: none; }
+.rail .foot { margin-top: auto; text-align: center; font: 10px/1.5 var(--mono); color: var(--dust); }
+
+main { overflow: hidden; position: relative; }
+.view { position: absolute; inset: 0; padding: 30px 39px; overflow: auto; opacity: 0; visibility: hidden; transform: translateY(9px); transition: opacity .35s, transform .35s, visibility .35s; }
+.view.on { opacity: 1; visibility: visible; transform: none; }
+.head { display: flex; align-items: flex-end; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; }
+h1 { font: italic 500 54px/1 var(--display); letter-spacing: -.02em; transform: rotate(-2deg); transform-origin: left bottom; }
+.sub { font: 12px var(--mono); color: var(--dust); padding-bottom: 6px; }
+.head .tools { margin-left: auto; display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 18px; border-radius: 9999px; border: 1px solid var(--hairline); font: 600 12.5px var(--body); transition: background .15s, border-color .15s, transform .1s; }
+.pill:hover { border-color: var(--dust); }
+.pill:active { transform: scale(.97); }
+.pill.primary { background: var(--constellation); color: var(--sky-deep); border-color: transparent; }
+.pill.danger { background: var(--nova); color: var(--sky-deep); border-color: transparent; }
+.seg { display: inline-flex; padding: 3px; border-radius: 9999px; background: var(--sky-deep); border: 1px solid var(--hairline); }
+.seg button { height: 30px; padding: 0 15px; border-radius: 9999px; color: var(--dust); font: 600 12.5px var(--body); transition: .15s; }
+.seg button[aria-pressed="true"] { background: var(--constellation); color: var(--sky-deep); }
+.search { height: 36px; width: 220px; border-radius: 9999px; border: 1px solid var(--hairline); background: var(--sky-deep); color: var(--moonlight); padding: 0 18px; font: 13px var(--mono); }
+.card { background: var(--glass); border: 1px solid var(--hairline); border-radius: 39px; padding: 24px; backdrop-filter: blur(12px); }
+
+#v-sky { padding: 0; }
+#v-sky .head { position: absolute; top: 30px; left: 39px; right: 39px; z-index: 2; pointer-events: none; }
+#v-sky .head .tools { pointer-events: auto; }
+#skyCanvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+.legend { position: absolute; left: 39px; bottom: 24px; display: grid; gap: 6px; font: 11px var(--mono); color: var(--dust); z-index: 2; }
+.legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 9px; vertical-align: middle; }
+.inspector {
+  position: absolute; z-index: 3; width: 280px; padding: 21px 24px; border-radius: 30px;
+  background: var(--glass); border: 1px solid var(--constellation); backdrop-filter: blur(16px);
+  box-shadow: 0 0 39px rgb(19 210 193 / .18); opacity: 0; pointer-events: none; transform: scale(.96); transition: opacity .2s, transform .2s;
+}
+.inspector.on { opacity: 1; pointer-events: auto; transform: none; }
+.inspector h3 { font: italic 500 26px/1.1 var(--display); margin: 6px 0 15px; word-break: break-all; }
+.inspector dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 15px; font-size: 12.5px; margin-bottom: 18px; }
+.inspector dt { color: var(--dust); }
+.inspector dd { font-family: var(--mono); text-align: right; }
+.inspector .row { display: flex; gap: 9px; }
+.inspector .x { position: absolute; top: 15px; right: 18px; color: var(--dust); font-size: 18px; }
+
+.scrubber { position: absolute; right: 39px; bottom: 24px; z-index: 2; display: flex; align-items: flex-end; gap: 2px; height: 42px; padding: 9px 15px; border-radius: 9999px; background: var(--glass); border: 1px solid var(--hairline); }
+.scrubber i { width: 3px; border-radius: 9999px; background: var(--constellation); opacity: .8; transition: height .4s; }
+
+table { width: 100%; border-collapse: separate; border-spacing: 0; }
+th { text-align: left; padding: 0 15px 12px; white-space: nowrap; cursor: pointer; user-select: none; }
+th.n, td.n { text-align: right; }
+th[aria-sort] { color: var(--constellation); }
+td { height: 42px; padding: 0 15px; border-top: 1px solid rgb(28 56 51 / .5); white-space: nowrap; }
+tbody tr { transition: background .15s; }
+tbody tr:hover td { background: rgb(19 210 193 / .05); }
+tr.group td:first-child { cursor: pointer; }
+tr.open td { background: rgb(19 210 193 / .08); }
+tr.child td { border-top-color: transparent; color: rgb(205 228 223 / .8); }
+tr.child td:first-child { padding-left: 45px; position: relative; }
+tr.child td:first-child::before { content: ""; position: absolute; left: 25px; top: -21px; height: 42px; border-left: 1px solid var(--hairline); }
+tr.child td:first-child::after { content: ""; position: absolute; left: 25px; top: 50%; width: 12px; border-top: 1px solid var(--hairline); }
+.star { display: inline-block; border-radius: 50%; margin-right: 12px; vertical-align: middle; }
+.badge { font: 10.5px var(--mono); color: var(--dust); border: 1px solid var(--hairline); border-radius: 9999px; padding: 1px 9px; margin-left: 9px; }
+.bar { display: inline-block; height: 4px; border-radius: 9999px; background: var(--constellation); vertical-align: middle; margin-left: 9px; opacity: .7; transition: width .6s; }
+td.flash { animation: flash 1.2s; }
+@keyframes flash { from { color: var(--nova); text-shadow: 0 0 12px var(--nova); } }
+
+.giant-wrap { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(260px, .7fr); gap: 30px; align-items: center; }
+#giantCanvas { width: 100%; aspect-ratio: 1.25; }
+.bands { display: grid; gap: 12px; }
+.band { display: grid; grid-template-columns: 15px 1fr auto; gap: 12px; align-items: center; padding: 12px 18px; border-radius: 9999px; border: 1px solid var(--hairline); transition: border-color .2s, background .2s; cursor: default; }
+.band:hover { border-color: var(--dust); background: rgb(205 228 223 / .03); }
+.band i { width: 15px; height: 15px; border-radius: 50%; }
+.moons { display: flex; gap: 30px; align-items: flex-end; margin-top: 30px; flex-wrap: wrap; }
+.moon-item { display: grid; justify-items: center; gap: 9px; font: 11px var(--mono); color: var(--dust); }
+.moon-item b { display: block; border-radius: 50%; background: radial-gradient(circle at 35% 30%, var(--moonlight), #3e5a54 70%); box-shadow: 0 0 18px rgb(205 228 223 / .15); }
+.pressure { display: inline-flex; gap: 9px; align-items: center; font: 12px var(--mono); }
+.pressure i { width: 9px; height: 9px; border-radius: 50%; background: var(--nova); box-shadow: 0 0 9px var(--nova); animation: pulse 1.6s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.instruments { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.hero-num { font: 400 72px/1 var(--mono); letter-spacing: -.04em; }
+.hero-num small { font-size: 21px; color: var(--dust); }
+.history { display: flex; align-items: flex-end; gap: 3px; height: 150px; margin-top: 18px; }
+.history .col { flex: 1; display: flex; flex-direction: column-reverse; gap: 2px; }
+.history .col i { height: 4px; border-radius: 9999px; background: var(--hairline); }
+.history .col i.on { background: var(--constellation); }
+.history .col i.on.hot { background: var(--nova); }
+.cores { display: grid; grid-template-columns: repeat(7, 1fr); gap: 15px 9px; margin-top: 18px; }
+.core { display: grid; justify-items: center; gap: 6px; font: 10px var(--mono); color: var(--dust); }
+.meter { display: flex; flex-direction: column-reverse; gap: 3px; width: 100%; max-width: 30px; }
+.meter i { height: 5px; border-radius: 9999px; background: var(--hairline); transition: background .3s, box-shadow .3s; }
+.meter i.on { background: var(--c, var(--constellation)); box-shadow: 0 0 6px var(--c, var(--constellation)); }
+.comet { position: relative; height: 72px; margin-top: 15px; border-radius: 9999px; overflow: hidden; background: var(--sky-deep); border: 1px solid var(--hairline); }
+.comet canvas { width: 100%; height: 100%; display: block; }
+
+.sweep { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 30px; }
+#meteorCanvas { width: 100%; height: 420px; border-radius: 39px; background: radial-gradient(ellipse at 50% 120%, rgb(19 210 193 / .12), transparent 60%), var(--sky-deep); border: 1px solid var(--hairline); display: block; }
+.cat { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--hairline); }
+.check { width: 21px; height: 21px; border-radius: 50%; border: 1px solid var(--dust); display: grid; place-items: center; transition: .15s; }
+.check[aria-checked="true"] { background: var(--constellation); border-color: var(--constellation); }
+.check[aria-checked="true"]::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--sky-deep); }
+.total { font: 400 54px/1 var(--mono); letter-spacing: -.03em; margin: 9px 0 21px; }
+.total small { font-size: 18px; color: var(--dust); }
+
+.overlay { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgb(2 8 7 / .82); backdrop-filter: blur(6px); opacity: 0; visibility: hidden; transition: .3s; }
+.overlay.on { opacity: 1; visibility: visible; }
+.eclipse { text-align: center; max-width: 520px; padding: 24px; }
+.eclipse canvas { width: 280px; height: 280px; display: block; margin: 0 auto 15px; }
+.eclipse h2 { font: italic 500 42px/1.05 var(--display); transform: rotate(-2deg); margin-bottom: 15px; }
+.eclipse p { color: var(--dust); margin-bottom: 15px; }
+.eclipse .row { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+
+.palette { width: min(560px, 92vw); border-radius: 30px; background: var(--sky-raised); border: 1px solid var(--constellation); box-shadow: 0 0 60px rgb(19 210 193 / .2); overflow: hidden; }
+.palette input { width: 100%; height: 63px; background: none; border: 0; border-bottom: 1px solid var(--hairline); color: var(--moonlight); padding: 0 27px; font: italic 500 24px var(--display); outline: none; }
+.palette ul { list-style: none; max-height: 330px; overflow: auto; padding: 9px; }
+.palette li { display: flex; justify-content: space-between; gap: 12px; padding: 12px 18px; border-radius: 9999px; cursor: pointer; font-size: 13.5px; }
+.palette li[aria-selected="true"] { background: rgb(19 210 193 / .14); color: var(--constellation); }
+.palette li span:last-child { font: 12px var(--mono); color: var(--dust); }
+
+.toast { position: fixed; bottom: 54px; left: 50%; transform: translate(-50%, 20px); z-index: 30; padding: 12px 24px; border-radius: 9999px; background: var(--sky-raised); border: 1px solid var(--nova); font: 12.5px var(--mono); opacity: 0; transition: .3s; pointer-events: none; }
+.toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+footer.status { grid-column: 1 / -1; display: flex; align-items: center; gap: 24px; padding: 0 21px; border-top: 1px solid var(--hairline); background: rgb(2 8 7 / .7); font: 11px var(--mono); color: var(--dust); white-space: nowrap; overflow: hidden; }
+footer .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+
+@media (max-width: 760px) {
+  #app { grid-template-columns: 1fr; grid-template-rows: 48px 1fr 72px 36px; }
+  nav.rail { grid-row: 3; flex-direction: row; overflow-x: auto; padding: 0 12px; border-right: 0; border-top: 1px solid var(--hairline); }
+  nav.rail .foot, .orbit .tip { display: none; }
+  .orbit { flex: none; }
+  .view { padding: 21px 16px; }
+  #v-sky .head { left: 16px; right: 16px; }
+  h1 { font-size: 39px; }
+  .giant-wrap, .sweep { grid-template-columns: 1fr; }
+  .scrubber { display: none; }
+  .telemetry .hide-sm { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation: none !important; }
+}
+</style>
+</head>
+<body>
+<canvas id="dust"></canvas>
+<div id="app">
+  <header class="telemetry">
+    <span class="brand">Planisphere</span>
+    <span class="hide-sm">RA <b id="ra">00h 00m 00s</b></span>
+    <span class="hide-sm">DEC <b id="dec">+00°00′</b></span>
+    <span class="hide-sm">LOAD <b id="loadavg">0.00</b></span>
+    <span class="spacer"></span>
+    <span class="kbd">⌘K point the telescope</span>
+    <span class="epoch">EPOCH J2026.8</span>
+  </header>
+
+  <nav class="rail" aria-label="Views">
+    <button class="orbit" data-view="sky" aria-label="Sky map" aria-current="page" style="--c:var(--constellation)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg><span class="moon" id="m-sky"></span><span class="tip">Sky map · 1</span></button>
+    <button class="orbit" data-view="ledger" aria-label="Star ledger" style="--c:var(--constellation)"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="moon" id="m-ledger"></span><span class="tip">Star ledger · 2</span></button>
+    <button class="orbit" data-view="giant" aria-label="Gas giant" style="--c:var(--aurora)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/><ellipse cx="12" cy="12" rx="11" ry="3.5"/></svg><span class="moon" id="m-giant"></span><span class="tip">Gas giant · 3</span></button>
+    <button class="orbit" data-view="instruments" aria-label="Instruments" style="--c:var(--constellation)"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg><span class="moon" id="m-instruments"></span><span class="tip">Instruments · 4</span></button>
+    <button class="orbit" data-view="sweep" aria-label="Meteor sweep" style="--c:var(--nova)"><svg viewBox="0 0 24 24"><path d="M4 20 20 4M14 4h6v6M7 13l4 4"/></svg><span class="moon" id="m-sweep"></span><span class="tip">Meteor sweep · 5</span></button>
+    <div class="foot">M4 Pro<br><span id="uptime">up 4h 20m</span></div>
+  </nav>
+
+  <main>
+    <section class="view on" id="v-sky" aria-label="Sky map">
+      <div class="head">
+        <h1>The Sky Tonight</h1>
+        <p class="sub" id="skySub"></p>
+        <div class="tools">
+          <div class="seg" role="group" aria-label="Star size">
+            <button aria-pressed="true" data-size="mem">Size by memory</button>
+            <button aria-pressed="false" data-size="cpu">by CPU</button>
+          </div>
+        </div>
+      </div>
+      <canvas id="skyCanvas" aria-label="Processes plotted as stars"></canvas>
+      <div class="legend">
+        <span><i style="background:var(--constellation)"></i>your apps</span>
+        <span><i style="background:var(--aurora)"></i>system daemons</span>
+        <span><i style="background:var(--nova)"></i>burning hot (&gt;40% CPU or &gt;2 GB)</span>
+        <span style="margin-top:6px">hover to aim · click to lock · drag to turn the sky</span>
+      </div>
+      <div class="scrubber" id="scrubber" aria-label="CPU history"></div>
+      <div class="inspector" id="inspector" role="dialog" aria-label="Star details">
+        <button class="x" id="inspClose" aria-label="Close">×</button>
+        <p class="label" id="inspKind"></p>
+        <h3 id="inspName"></h3>
+        <dl id="inspStats"></dl>
+        <div class="row">
+          <button class="pill" id="inspTrack">Track</button>
+          <button class="pill danger" id="inspEclipse">Eclipse</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-ledger" aria-label="Star ledger">
+      <div class="head">
+        <h1>Star Ledger</h1>
+        <p class="sub" id="ledgerSub"></p>
+        <div class="tools">
+          <input class="search" id="ledgerSearch" placeholder="search the catalog" aria-label="Search processes">
+          <div class="seg" role="group" aria-label="Filter" id="ledgerFilter">
+            <button aria-pressed="true" data-f="all">All</button>
+            <button aria-pressed="false" data-f="user">Mine</button>
+            <button aria-pressed="false" data-f="system">System</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:18px 9px">
+        <table>
+          <thead><tr>
+            <th class="label" data-sort="name">Constellation / star</th>
+            <th class="label n" data-sort="cpu">% CPU</th>
+            <th class="label n" data-sort="mem" aria-sort="descending">Memory</th>
+            <th class="label n" data-sort="threads">Threads</th>
+            <th class="label n" data-sort="pid">PID</th>
+            <th class="label n"></th>
+          </tr></thead>
+          <tbody id="ledgerBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="view" id="v-giant" aria-label="Memory">
+      <div class="head">
+        <h1>Memory, a Gas Giant</h1>
+        <p class="sub" id="giantSub"></p>
+        <div class="tools"><span class="pressure" id="pressure"><i></i>pressure elevated</span></div>
+      </div>
+      <div class="giant-wrap">
+        <canvas id="giantCanvas" aria-label="Memory drawn as planet bands"></canvas>
+        <div>
+          <p class="label" style="margin-bottom:15px">Bands, from the pole down</p>
+          <div class="bands" id="bands"></div>
+        </div>
+      </div>
+      <p class="label" style="margin-top:30px">Largest moons</p>
+      <div class="moons" id="moons"></div>
+    </section>
+
+    <section class="view" id="v-instruments" aria-label="Instruments">
+      <div class="head">
+        <h1>Instruments</h1>
+        <p class="sub">10 performance cores · 4 efficiency cores · sampled every second</p>
+      </div>
+      <div class="instruments">
+        <div class="card">
+          <p class="label">Processor</p>
+          <p class="hero-num num" id="cpuHero">0<small>%</small></p>
+          <div class="history" id="cpuHistory"></div>
+        </div>
+        <div class="card">
+          <p class="label">Cores</p>
+          <div class="cores" id="cores"></div>
+        </div>
+        <div class="card">
+          <p class="label">Network · comet tails</p>
+          <p class="num" style="margin-top:9px"><span style="color:var(--constellation)">↓ <span id="netIn">0</span></span> &nbsp; <span style="color:var(--aurora)">↑ <span id="netOut">0</span></span></p>
+          <div class="comet"><canvas id="cometNet"></canvas></div>
+          <p class="label" style="margin-top:24px">Disk</p>
+          <p class="num" style="margin-top:9px">read <span id="diskR">0</span> · write <span id="diskW">0</span></p>
+          <div class="comet"><canvas id="cometDisk"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="v-sweep" aria-label="Cleanup">
+      <div class="head">
+        <h1>Meteor Sweep</h1>
+        <p class="sub" id="sweepSub">scan the disk for stardust that is safe to clear</p>
+      </div>
+      <div class="sweep">
+        <canvas id="meteorCanvas" aria-label="Files shown as falling meteors"></canvas>
+        <div class="card">
+          <p class="label">Stardust found</p>
+          <p class="total num" id="sweepTotal">0.0<small> GB</small></p>
+          <div id="cats"></div>
+          <div style="display:flex;gap:9px;margin-top:24px;flex-wrap:wrap">
+            <button class="pill primary" id="scanBtn">Scan the sky</button>
+            <button class="pill danger" id="sweepBtn" disabled style="opacity:.4">Sweep</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="status">
+    <span><span class="dot" style="background:var(--aurora)"></span>signal nominal</span>
+    <span id="stProcs"></span>
+    <span>CPU <b id="stCpu" style="color:var(--constellation);font-weight:400"></b></span>
+    <span>Memory <b id="stMem" style="color:var(--aurora);font-weight:400"></b></span>
+  </footer>
+</div>
+
+<div class="overlay" id="eclipseOverlay" role="dialog" aria-modal="true" aria-label="Confirm force quit">
+  <div class="eclipse">
+    <canvas id="eclipseCanvas" width="560" height="560"></canvas>
+    <h2 id="eclipseTitle"></h2>
+    <p id="eclipseBody"></p>
+    <p class="num" id="eclipseStats" style="color:var(--moonlight)"></p>
+    <div class="row">
+      <button class="pill" id="eclipseCancel">Let it shine</button>
+      <button class="pill danger" id="eclipseGo">Eclipse now</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="paletteOverlay" role="dialog" aria-modal="true" aria-label="Find a process">
+  <div class="palette">
+    <input id="paletteInput" placeholder="Point the telescope at…" aria-label="Process name">
+    <ul id="paletteList" role="listbox"></ul>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const C = { teal: "#13d2c1", aurora: "#55d48b", moon: "#cde4df", dust: "#5e7a74", nova: "#ff7a59", hair: "#1c3833", sky: "#05110f", deep: "#020807" };
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = s => document.querySelector(s);
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const fmtMem = mb => mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
+const fmtRate = kb => kb >= 1024 ? (kb / 1024).toFixed(1) + " MB/s" : Math.round(kb) + " KB/s";
+
+const SEED = [
+  ["canary", 64, 11160, "user"], ["com.apple.WebKit.WebContent", 6, 5427, "user"], ["Claude", 28, 3379, "user"],
+  ["omp", 16, 3174, "user"], ["claude", 11, 3072, "user"], ["node", 39, 2150, "user"], ["fff-mcp", 11, 1433, "user"],
+  ["Tern", 2, 1433, "user"], ["WeChat", 15, 1228, "user"], ["python3.15", 9, 932, "user"], ["codedb", 25, 921, "user"],
+  ["git", 15, 864, "user"], ["Floodlight", 1, 824, "user"], ["企业微信", 9, 777, "user"], ["Xcode", 40, 238, "user"],
+  ["zsh", 44, 226, "user"], ["Safari", 3, 644, "user"], ["Surge", 1, 207, "user"], ["Finder", 1, 263, "user"],
+  ["WindowServer", 1, 1180, "system"], ["kernel_task", 1, 2900, "system"], ["mds_stores", 4, 410, "system"],
+  ["launchd", 1, 38, "system"], ["coreaudiod", 1, 46, "system"], ["bluetoothd", 1, 31, "system"], ["spotlightknowledged", 2, 180, "system"],
+  ["photoanalysisd", 1, 260, "system"], ["mediaanalysisd", 1, 312, "system"], ["cloudd", 1, 92, "system"], ["trustd", 2, 24, "system"],
+  ["VTDecoderXPCService", 2, 286, "system"], ["chronod", 1, 220, "system"], ["softwareupdated", 1, 70, "system"]
+];
+let nextPid = 1200;
+const memScale = 21600 / SEED.reduce((s, r) => s + r[2], 0);
+const groups = SEED.map(([name, kids, mem, kind], gi) => {
+  const shown = Math.min(kids, 9);
+  const angle = (gi / SEED.length) * Math.PI * 2 + rand(-.12, .12);
+  const radius = kind === "system" ? rand(.55, .9) : rand(.18, .62);
+  const g = { name, kind, kidsTotal: kids, angle, radius, open: false, procs: [] };
+  for (let i = 0; i < shown; i++) {
+    const share = i === 0 ? .5 : .5 / Math.max(1, shown - 1);
+    g.procs.push({
+      pid: nextPid += Math.floor(rand(3, 900)),
+      name: i === 0 ? name : `${name} Helper${shown > 2 ? " (" + ["Renderer", "GPU", "Plugin", "Network", "Audio", "Storage", "Utility", "Worker"][i % 8] + ")" : ""}`,
+      group: g, root: i === 0,
+      mem: 0, base: mem * memScale * share * rand(.8, 1.2), cpu: rand(0, kind === "user" ? 3 : 1) * (i === 0 ? 3 : 1), threads: Math.floor(rand(4, 400)),
+      ox: i === 0 ? 0 : rand(-.09, .09), oy: i === 0 ? 0 : rand(-.09, .09), flare: 0, twinkle: rand(0, 6.28)
+    });
+  }
+  return g;
+});
+const allProcs = () => groups.flatMap(g => g.procs);
+const groupMem = g => g.procs.reduce((s, p) => s + p.mem, 0);
+const groupCpu = g => g.procs.reduce((s, p) => s + p.cpu, 0);
+const groupThreads = g => g.procs.reduce((s, p) => s + p.threads, 0);
+
+const history = Array.from({ length: 48 }, () => rand(15, 40));
+const coreLoad = Array.from({ length: 14 }, () => rand(5, 50));
+let net = { in: 120, out: 30 }, disk = { r: 400, w: 200 };
+let totalCpu = 0, totalMem = 0;
+
+function tick() {
+  for (const p of allProcs()) {
+    p.cbase ??= p.cpu;
+    p.cpu = clamp(p.cpu + (p.cbase - p.cpu) * .15 + rand(-1.2, 1.2) * (p.root ? 1.4 : 1), 0, 95);
+    p.mem = clamp((p.mem || p.base) + (p.base - (p.mem || p.base)) * .1 + p.base * rand(-.03, .03), 4, 14000);
+    if (Math.random() < .0006) { p.cpu = rand(45, 90); p.flare = 1; }
+  }
+  totalCpu = clamp(allProcs().reduce((s, p) => s + p.cpu, 0) / 12, 0, 100);
+  totalMem = allProcs().reduce((s, p) => s + p.mem, 0);
+  history.push(totalCpu); history.shift();
+  coreLoad.forEach((v, i) => coreLoad[i] = clamp(v + rand(-14, 14) + (totalCpu - v) * .15, 0, 100));
+  net.in = clamp(net.in * rand(.6, 1.5), 4, 9000); net.out = clamp(net.out * rand(.6, 1.5), 2, 3000);
+  disk.r = clamp(disk.r * rand(.6, 1.5), 0, 40000); disk.w = clamp(disk.w * rand(.6, 1.5), 0, 20000);
+  renderChrome();
+  if (view === "ledger") renderLedger();
+  if (view === "giant") renderGiantSide();
+  if (view === "instruments") renderInstruments();
+  if (locked) fillInspector(locked);
+}
+
+function renderChrome() {
+  const n = allProcs().length;
+  $("#stProcs").textContent = `${n} stars in ${groups.length} constellations`;
+  $("#stCpu").textContent = totalCpu.toFixed(1) + "%";
+  $("#stMem").textContent = fmtMem(totalMem) + " / 24 GB";
+  $("#skySub").textContent = `${n} stars · ${groups.length} constellations · CPU ${totalCpu.toFixed(1)}%`;
+  $("#loadavg").textContent = (totalCpu / 10).toFixed(2);
+  const setMoon = (id, pct) => $(id).style.setProperty("--a", (pct / 100 * 360) + "deg");
+  setMoon("#m-sky", totalCpu); setMoon("#m-ledger", n / 1.2); setMoon("#m-giant", totalMem / 24576 * 100);
+  setMoon("#m-instruments", totalCpu); setMoon("#m-sweep", sweepFound / 160);
+  $("#scrubber").innerHTML = history.slice(-36).map(v => `<i style="height:${clamp(v, 4, 100) * .24}px;${v > 60 ? "background:" + C.nova : ""}"></i>`).join("");
+}
+
+function clock() {
+  const d = new Date();
+  const lst = (d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600 + 8.2) % 24;
+  const h = Math.floor(lst), m = Math.floor(lst % 1 * 60), s = Math.floor(lst * 3600 % 60);
+  $("#ra").textContent = `${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
+  $("#dec").textContent = `+34°${String(d.getSeconds()).padStart(2, "0")}′`;
+}
+
+const dust = $("#dust"), dctx = dust.getContext("2d");
+let dustStars = [];
+function sizeDust() {
+  dust.width = innerWidth * devicePixelRatio; dust.height = innerHeight * devicePixelRatio;
+  dustStars = Array.from({ length: 260 }, () => ({ x: Math.random(), y: Math.random(), r: rand(.3, 1.1), a: rand(.05, .35), t: rand(0, 6.28) }));
+}
+function drawDust(t) {
+  dctx.clearRect(0, 0, dust.width, dust.height);
+  const g = dctx.createRadialGradient(dust.width * .7, dust.height * .2, 0, dust.width * .7, dust.height * .2, dust.width * .7);
+  g.addColorStop(0, "rgba(19,210,193,0.06)"); g.addColorStop(1, "rgba(2,8,7,0)");
+  dctx.fillStyle = g; dctx.fillRect(0, 0, dust.width, dust.height);
+  for (const s of dustStars) {
+    dctx.globalAlpha = s.a * (reduceMotion ? 1 : .6 + .4 * Math.sin(t / 900 + s.t));
+    dctx.fillStyle = C.moon; dctx.beginPath();
+    dctx.arc(s.x * dust.width, s.y * dust.height, s.r * devicePixelRatio, 0, 7); dctx.fill();
+  }
+  dctx.globalAlpha = 1;
+}
+
+const sky = $("#skyCanvas"), sctx = sky.getContext("2d");
+let rot = 0, dragging = null, hover = null, locked = null, sizeBy = "mem", tracking = false, eclipsing = [];
+function skyGeom() {
+  const w = sky.clientWidth, h = sky.clientHeight;
+  return { w, h, cx: w * .55, cy: h * .54, R: Math.min(w * .42, h * .43) };
+}
+function starPos(p, G) {
+  const g = p.group, a = g.angle + rot;
+  const gx = Math.cos(a) * g.radius, gy = Math.sin(a) * g.radius;
+  const ca = Math.cos(rot), sa = Math.sin(rot);
+  const ox = p.ox * ca - p.oy * sa, oy = p.ox * sa + p.oy * ca;
+  return { x: G.cx + (gx + ox) * G.R, y: G.cy + (gy + oy) * G.R };
+}
+function starR(p) { return sizeBy === "mem" ? clamp(Math.sqrt(p.mem) / 12, 1.2, 11) : clamp(Math.sqrt(p.cpu) * 1.3, 1, 11); }
+function starColor(p) { return (p.cpu > 40 || p.mem > 2048) ? C.nova : p.group.kind === "system" ? C.aurora : C.teal; }
+
+function drawSky(t) {
+  const dpr = devicePixelRatio, G = skyGeom();
+  if (sky.width !== G.w * dpr) { sky.width = G.w * dpr; sky.height = G.h * dpr; }
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0); sctx.clearRect(0, 0, G.w, G.h);
+  sctx.strokeStyle = C.hair; sctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) { sctx.beginPath(); sctx.arc(G.cx, G.cy, G.R * i / 4, 0, 7); sctx.stroke(); }
+  sctx.font = "10px 'Space Mono'"; sctx.fillStyle = C.dust; sctx.textAlign = "center"; sctx.textBaseline = "middle";
+  for (let hr = 0; hr < 24; hr++) {
+    const a = hr / 24 * Math.PI * 2 + rot;
+    sctx.globalAlpha = hr % 6 === 0 ? .9 : .35;
+    sctx.beginPath(); sctx.moveTo(G.cx + Math.cos(a) * G.R * .25, G.cy + Math.sin(a) * G.R * .25);
+    sctx.lineTo(G.cx + Math.cos(a) * G.R, G.cy + Math.sin(a) * G.R); sctx.stroke();
+    sctx.fillText(hr + "h", G.cx + Math.cos(a) * (G.R + 18), G.cy + Math.sin(a) * (G.R + 18));
+  }
+  sctx.globalAlpha = 1;
+  sctx.beginPath(); sctx.arc(G.cx, G.cy, G.R + 30, 0, 7); sctx.setLineDash([2, 6]); sctx.stroke(); sctx.setLineDash([]);
+
+  for (const g of groups) {
+    if (g.procs.length < 2) continue;
+    const root = starPos(g.procs[0], G);
+    const isHot = locked && locked.group === g || hover && hover.group === g;
+    sctx.strokeStyle = isHot ? "rgba(19,210,193,.55)" : "rgba(94,122,116,.28)";
+    sctx.lineWidth = isHot ? 1.2 : .8;
+    const pts = g.procs.slice(1).map(p => starPos(p, G)).sort((a, b) => Math.atan2(a.y - root.y, a.x - root.x) - Math.atan2(b.y - root.y, b.x - root.x));
+    sctx.beginPath(); sctx.moveTo(root.x, root.y);
+    pts.forEach(p => sctx.lineTo(p.x, p.y)); sctx.stroke();
+  }
+
+  for (const p of allProcs()) {
+    const { x, y } = starPos(p, G), r = starR(p), col = starColor(p);
+    const tw = reduceMotion ? 1 : .75 + .25 * Math.sin(t / 400 + p.twinkle);
+    const glow = sctx.createRadialGradient(x, y, 0, x, y, r * 4.5);
+    glow.addColorStop(0, col + "55"); glow.addColorStop(1, col + "00");
+    sctx.fillStyle = glow; sctx.beginPath(); sctx.arc(x, y, r * 4.5, 0, 7); sctx.fill();
+    sctx.globalAlpha = clamp(.35 + p.cpu / 30, .35, 1) * tw;
+    sctx.fillStyle = col; sctx.beginPath(); sctx.arc(x, y, r, 0, 7); sctx.fill();
+    sctx.globalAlpha = 1;
+    if (p.root && groupMem(p.group) > 500) {
+      sctx.font = "italic 500 13px 'Bodoni Moda'"; sctx.fillStyle = C.moon; sctx.textAlign = "left";
+      sctx.fillText(p.group.name, x + r + 9, y - r - 3);
+    }
+    if (p.flare > 0) {
+      sctx.strokeStyle = C.nova; sctx.globalAlpha = p.flare; sctx.lineWidth = 2;
+      sctx.beginPath(); sctx.arc(x, y, r + (1 - p.flare) * 60, 0, 7); sctx.stroke();
+      for (let k = 0; k < 8; k++) {
+        const a = k / 8 * 6.283, d0 = r + 4, d1 = r + 4 + (1 - p.flare) * 30;
+        sctx.beginPath(); sctx.moveTo(x + Math.cos(a) * d0, y + Math.sin(a) * d0); sctx.lineTo(x + Math.cos(a) * d1, y + Math.sin(a) * d1); sctx.stroke();
+      }
+      sctx.globalAlpha = 1; sctx.lineWidth = 1;
+      p.flare = Math.max(0, p.flare - .012);
+    }
+  }
+
+  for (const e of eclipsing) {
+    e.k += .018;
+    const s = 1 - e.k;
+    sctx.fillStyle = C.deep; sctx.beginPath(); sctx.arc(e.x, e.y, 30 * Math.sin(Math.min(e.k, 1) * Math.PI), 0, 7); sctx.fill();
+    sctx.strokeStyle = C.nova; sctx.globalAlpha = Math.max(0, s); sctx.lineWidth = 3;
+    sctx.beginPath(); sctx.arc(e.x, e.y, 30 * Math.sin(Math.min(e.k, 1) * Math.PI) + 3, 0, 7); sctx.stroke();
+    sctx.globalAlpha = 1; sctx.lineWidth = 1;
+  }
+  eclipsing = eclipsing.filter(e => e.k < 1);
+
+  const target = locked || hover;
+  if (target && target.group.procs.includes(target)) {
+    const { x, y } = starPos(target, G), r = starR(target) + 12;
+    sctx.strokeStyle = locked ? C.teal : C.moon; sctx.lineWidth = 1;
+    sctx.beginPath(); sctx.arc(x, y, r, 0, 7); sctx.stroke();
+    const spin = reduceMotion ? 0 : t / 1200;
+    for (let k = 0; k < 4; k++) {
+      const a = k * Math.PI / 2 + spin;
+      sctx.beginPath(); sctx.moveTo(x + Math.cos(a) * (r + 4), y + Math.sin(a) * (r + 4)); sctx.lineTo(x + Math.cos(a) * (r + 15), y + Math.sin(a) * (r + 15)); sctx.stroke();
+    }
+    if (locked) placeInspector(x, y, G);
+  }
+  if (tracking && locked && !dragging) {
+    const g = locked.group, desired = -Math.PI / 2 - g.angle;
+    let d = ((desired - rot) % 6.283 + 9.42) % 6.283 - 3.14;
+    rot += d * .04;
+  } else if (!dragging && !reduceMotion) rot += .00025;
+}
+
+function pickStar(mx, my) {
+  const G = skyGeom(); let best = null, bd = 18;
+  for (const p of allProcs()) {
+    const { x, y } = starPos(p, G), d = Math.hypot(x - mx, y - my) - starR(p);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+sky.addEventListener("pointermove", e => {
+  const b = sky.getBoundingClientRect();
+  if (dragging) {
+    const G = skyGeom();
+    const a0 = Math.atan2(dragging.y - G.cy, dragging.x - G.cx), a1 = Math.atan2(e.clientY - b.top - G.cy, e.clientX - b.left - G.cx);
+    rot += a1 - a0; dragging = { x: e.clientX - b.left, y: e.clientY - b.top, moved: true }; tracking = false; return;
+  }
+  hover = pickStar(e.clientX - b.left, e.clientY - b.top);
+  sky.style.cursor = hover ? "pointer" : "grab";
+});
+sky.addEventListener("pointerdown", e => { const b = sky.getBoundingClientRect(); dragging = { x: e.clientX - b.left, y: e.clientY - b.top, moved: false }; });
+addEventListener("pointerup", e => {
+  if (dragging && !dragging.moved && e.target === sky) {
+    const b = sky.getBoundingClientRect(); const p = pickStar(e.clientX - b.left, e.clientY - b.top);
+    lock(p);
+  }
+  dragging = null;
+});
+document.querySelectorAll("[data-size]").forEach(b => b.onclick = () => {
+  sizeBy = b.dataset.size; document.querySelectorAll("[data-size]").forEach(x => x.setAttribute("aria-pressed", x === b));
+});
+
+function lock(p) {
+  locked = p; tracking = false;
+  $("#inspector").classList.toggle("on", !!p);
+  $("#inspTrack").textContent = "Track";
+  if (p) fillInspector(p);
+}
+function fillInspector(p) {
+  $("#inspKind").textContent = `${p.group.kind === "system" ? "system daemon" : "your app"} · ${p.root ? "brightest of " + p.group.name : "moon of " + p.group.name}`;
+  $("#inspName").textContent = p.name;
+  $("#inspStats").innerHTML = [
+    ["PID", p.pid], ["CPU", p.cpu.toFixed(1) + "%"], ["Memory", fmtMem(p.mem)], ["Threads", p.threads],
+    ["Constellation", `${p.group.procs.length} of ${p.group.kidsTotal}`]
+  ].map(([k, v]) => `<dt>${k}</dt><dd class="${k === "CPU" && p.cpu > 40 || k === "Memory" && p.mem > 2048 ? "hot" : ""}">${v}</dd>`).join("");
+}
+function placeInspector(x, y, G) {
+  const el = $("#inspector"), w = 280, h = el.offsetHeight;
+  let left = x + 36, top = y - h / 2;
+  if (left + w > G.w - 24) left = x - w - 36;
+  top = clamp(top, 90, G.h - h - 80);
+  el.style.left = left + "px"; el.style.top = top + "px";
+}
+$("#inspClose").onclick = () => lock(null);
+$("#inspTrack").onclick = () => { tracking = !tracking; $("#inspTrack").textContent = tracking ? "Tracking…" : "Track"; };
+$("#inspEclipse").onclick = () => locked && openEclipse(locked);
+
+let eclipseTarget = null, eclipseAnim = 0;
+function openEclipse(p) {
+  eclipseTarget = p;
+  const g = p.group, all = p.root;
+  const mem = all ? groupMem(g) : p.mem;
+  $("#eclipseTitle").textContent = all ? `Eclipse ${g.name} and its ${g.procs.length - 1} moons?` : `Eclipse ${p.name}?`;
+  $("#eclipseBody").textContent = `Unsaved work in ${all ? "these processes" : "this process"} will be lost. ${fmtMem(mem)} of memory returns to the sky.`;
+  $("#eclipseStats").textContent = `PID ${p.pid} · ${all ? groupThreads(g) : p.threads} threads · ${(all ? groupCpu(g) : p.cpu).toFixed(1)}% CPU`;
+  $("#eclipseOverlay").classList.add("on"); eclipseAnim = 0;
+  $("#eclipseGo").focus();
+}
+function closeEclipse() { $("#eclipseOverlay").classList.remove("on"); eclipseTarget = null; }
+$("#eclipseCancel").onclick = closeEclipse;
+$("#eclipseGo").onclick = () => {
+  const p = eclipseTarget; if (!p) return;
+  const G = skyGeom(), g = p.group;
+  const victims = p.root ? [...g.procs] : [p];
+  victims.forEach(v => { const pos = starPos(v, G); eclipsing.push({ ...pos, k: 0 }); });
+  const freed = victims.reduce((s, v) => s + v.mem, 0);
+  g.procs = g.procs.filter(x => !victims.includes(x));
+  if (!g.procs.length) groups.splice(groups.indexOf(g), 1);
+  closeEclipse(); lock(null);
+  toast(`${p.root ? g.name + " constellation" : p.name} eclipsed · ${fmtMem(freed)} returned to the sky`);
+  tick();
+};
+function drawEclipse(t) {
+  if (!$("#eclipseOverlay").classList.contains("on") || !eclipseTarget) return;
+  const cv = $("#eclipseCanvas"), x = cv.getContext("2d"), W = cv.width, c = W / 2;
+  eclipseAnim = Math.min(1, eclipseAnim + .012);
+  x.clearRect(0, 0, W, W);
+  const moons = eclipseTarget.root ? eclipseTarget.group.procs.length - 1 : 0;
+  for (let i = 0; i < moons; i++) {
+    const rr = 150 + (i % 4) * 22, a = t / (2400 + i * 300) + i * 2.1;
+    x.strokeStyle = "rgba(28,56,51,.8)"; x.beginPath(); x.arc(c, c, rr, 0, 7); x.stroke();
+    x.fillStyle = C.moon; x.globalAlpha = .7; x.beginPath(); x.arc(c + Math.cos(a) * rr, c + Math.sin(a) * rr, 4, 0, 7); x.fill(); x.globalAlpha = 1;
+  }
+  const corona = x.createRadialGradient(c, c, 80, c, c, 150);
+  corona.addColorStop(0, "rgba(255,122,89,.9)"); corona.addColorStop(.3, "rgba(255,122,89,.25)"); corona.addColorStop(1, "rgba(255,122,89,0)");
+  x.fillStyle = corona; x.beginPath(); x.arc(c, c, 150, 0, 7); x.fill();
+  x.fillStyle = "#ffd4c7"; x.beginPath(); x.arc(c, c, 84, 0, 7); x.fill();
+  const off = (1 - eclipseAnim) * 140;
+  x.fillStyle = C.deep; x.beginPath(); x.arc(c + off, c - off * .3, 86, 0, 7); x.fill();
+}
+
+let ledgerSort = "mem", ledgerFilter = "all";
+function renderLedger() {
+  const q = $("#ledgerSearch").value.trim().toLowerCase();
+  const val = { name: g => g.name.toLowerCase(), cpu: groupCpu, mem: groupMem, threads: groupThreads, pid: g => g.procs[0].pid };
+  let list = groups.filter(g => (ledgerFilter === "all" || g.kind === ledgerFilter) && (!q || g.procs.some(p => p.name.toLowerCase().includes(q))));
+  list.sort((a, b) => { const A = val[ledgerSort](a), B = val[ledgerSort](b); return ledgerSort === "name" ? A.localeCompare(B) : B - A; });
+  const maxMem = Math.max(...groups.map(groupMem));
+  $("#ledgerSub").textContent = `${list.length} constellations shown · ${allProcs().length} stars`;
+  const row = (p, g, isGroup) => {
+    const cpu = isGroup ? groupCpu(g) : p.cpu, mem = isGroup ? groupMem(g) : p.mem, th = isGroup ? groupThreads(g) : p.threads;
+    const col = starColor(isGroup ? { cpu, mem, group: g } : p);
+    const sz = clamp(Math.sqrt(mem) / 9, 4, 12);
+    return `<tr class="${isGroup ? "group" + (g.open ? " open" : "") : "child"}" data-g="${groups.indexOf(g)}" data-pid="${p.pid}">
+      <td><span class="star" style="width:${sz}px;height:${sz}px;background:${col};box-shadow:0 0 ${sz}px ${col}"></span>${isGroup ? g.name : p.name}${isGroup && g.kidsTotal > 1 ? `<span class="badge">${g.kidsTotal}</span>` : ""}</td>
+      <td class="n num ${cpu > 40 ? "hot" : ""}">${cpu.toFixed(1)}</td>
+      <td class="n num ${mem > 2048 ? "hot" : ""}">${fmtMem(mem)}</td>
+      <td class="n num">${th}</td>
+      <td class="n num">${p.pid}</td>
+      <td class="n"><span class="bar" style="width:${mem / maxMem * 90}px;background:${col}"></span></td></tr>`;
+  };
+  $("#ledgerBody").innerHTML = list.map(g => row(g.procs[0], g, true) + (g.open ? g.procs.map(p => row(p, g, false)).join("") : "")).join("");
+}
+$("#ledgerBody").onclick = e => {
+  const tr = e.target.closest("tr"); if (!tr) return;
+  const g = groups[+tr.dataset.g];
+  if (tr.classList.contains("group")) { g.open = !g.open; renderLedger(); }
+  else { const p = g.procs.find(x => x.pid == tr.dataset.pid); go("sky"); lock(p); tracking = true; $("#inspTrack").textContent = "Tracking…"; }
+};
+$("#ledgerSearch").oninput = renderLedger;
+document.querySelectorAll("#ledgerFilter button").forEach(b => b.onclick = () => {
+  ledgerFilter = b.dataset.f; document.querySelectorAll("#ledgerFilter button").forEach(x => x.setAttribute("aria-pressed", x === b)); renderLedger();
+});
+document.querySelectorAll("th[data-sort]").forEach(th => th.onclick = () => {
+  ledgerSort = th.dataset.sort; document.querySelectorAll("th").forEach(x => x.removeAttribute("aria-sort"));
+  th.setAttribute("aria-sort", "descending"); renderLedger();
+});
+
+const giant = $("#giantCanvas"), gctx = giant.getContext("2d");
+function memBands() {
+  const app = totalMem * .62, wired = 3100, comp = totalMem * .18, cache = 1900;
+  const used = app + wired + comp + cache, free = Math.max(0, 24576 - used);
+  return [
+    { name: "App memory", mb: app, col: C.teal }, { name: "Wired", mb: wired, col: C.aurora },
+    { name: "Compressed", mb: comp, col: C.moon }, { name: "Cached files", mb: cache, col: C.dust },
+    { name: "Free sky", mb: free, col: "#0e2a26" }
+  ];
+}
+function drawGiant(t) {
+  const dpr = devicePixelRatio, W = giant.clientWidth, H = giant.clientHeight;
+  if (!W) return;
+  if (giant.width !== W * dpr) { giant.width = W * dpr; giant.height = H * dpr; }
+  gctx.setTransform(dpr, 0, 0, dpr, 0, 0); gctx.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H / 2, R = Math.min(W, H) * .36, tilt = -.18;
+  const swapK = clamp(totalMem / 24576, .3, 1.2);
+  const ring = (front) => {
+    gctx.save(); gctx.translate(cx, cy); gctx.rotate(tilt);
+    for (let i = 0; i < 5; i++) {
+      gctx.strokeStyle = i % 2 ? "rgba(205,228,223,.25)" : "rgba(19,210,193,.35)"; gctx.lineWidth = 3 + i;
+      gctx.beginPath(); gctx.ellipse(0, 0, R * (1.45 + i * .07) * swapK, R * .26 * (1 + i * .05), 0, front ? 0 : Math.PI, front ? Math.PI : Math.PI * 2); gctx.stroke();
+    }
+    gctx.restore();
+  };
+  ring(false);
+  gctx.save(); gctx.beginPath(); gctx.arc(cx, cy, R, 0, 7); gctx.clip();
+  gctx.translate(cx, cy); gctx.rotate(tilt); gctx.translate(-cx, -cy);
+  const bands = memBands(), total = bands.reduce((s, b) => s + b.mb, 0);
+  let y = cy - R;
+  bands.forEach((b, i) => {
+    const h = b.mb / total * R * 2;
+    const stripes = Math.max(1, Math.round(h / 9));
+    for (let k = 0; k < stripes; k++) {
+      const sy = y + k * h / stripes, wob = reduceMotion ? 0 : Math.sin(t / 1600 + i * 1.7 + k) * 6;
+      gctx.fillStyle = b.col; gctx.globalAlpha = .55 + .45 * ((k % 2) ? .6 : 1);
+      gctx.beginPath(); gctx.moveTo(cx - R - 20, sy);
+      for (let x = -R - 20; x <= R + 20; x += 20) gctx.lineTo(cx + x, sy + Math.sin(x / 40 + t / 2000 + k) * 2 + wob * .3);
+      gctx.lineTo(cx + R + 20, sy + h / stripes - 2); gctx.lineTo(cx - R - 20, sy + h / stripes - 2); gctx.fill();
+    }
+    y += h;
+  });
+  gctx.globalAlpha = 1;
+  if (totalMem > 18000) {
+    const sx = cx + R * .32 + (reduceMotion ? 0 : Math.sin(t / 3000) * R * .25), sy = cy - R * .18;
+    const st = gctx.createRadialGradient(sx, sy, 0, sx, sy, R * .2);
+    st.addColorStop(0, "rgba(255,122,89,.95)"); st.addColorStop(.6, "rgba(255,122,89,.35)"); st.addColorStop(1, "rgba(255,122,89,0)");
+    gctx.fillStyle = st; gctx.beginPath(); gctx.ellipse(sx, sy, R * .22, R * .11, 0, 0, 7); gctx.fill();
+  }
+  gctx.restore();
+  const shade = gctx.createRadialGradient(cx - R * .4, cy - R * .4, R * .2, cx, cy, R * 1.05);
+  shade.addColorStop(0, "rgba(0,0,0,0)"); shade.addColorStop(1, "rgba(2,8,7,.85)");
+  gctx.fillStyle = shade; gctx.beginPath(); gctx.arc(cx, cy, R, 0, 7); gctx.fill();
+  ring(true);
+}
+function renderGiantSide() {
+  $("#giantSub").textContent = `${fmtMem(totalMem)} of 24 GB in orbit · swap ${fmtMem(totalMem > 18000 ? (totalMem - 18000) * .6 : 0)}`;
+  $("#pressure").style.visibility = totalMem > 18000 ? "visible" : "hidden";
+  $("#bands").innerHTML = memBands().map(b => `<div class="band"><i style="background:${b.col}"></i><span>${b.name}</span><span class="num">${fmtMem(b.mb)}</span></div>`).join("");
+  const top = [...groups].sort((a, b) => groupMem(b) - groupMem(a)).slice(0, 6);
+  $("#moons").innerHTML = top.map(g => { const s = clamp(Math.sqrt(groupMem(g)) * .9, 18, 96); return `<div class="moon-item"><b style="width:${s}px;height:${s}px"></b><span style="color:var(--moonlight)">${g.name}</span><span>${fmtMem(groupMem(g))}</span></div>`; }).join("");
+}
+
+function meter(pct, n, col) {
+  const lit = Math.round(pct / 100 * n);
+  return `<div class="meter" style="--c:${col}">${Array.from({ length: n }, (_, i) => `<i class="${i < lit ? "on" : ""}"></i>`).join("")}</div>`;
+}
+const comets = { net: Array.from({ length: 40 }, () => rand(.01, .2)), disk: Array.from({ length: 40 }, () => rand(.01, .15)) };
+function renderInstruments() {
+  $("#cpuHero").innerHTML = `${totalCpu.toFixed(1)}<small>%</small>`;
+  $("#cpuHistory").innerHTML = history.map(v => {
+    const lit = Math.round(v / 100 * 24);
+    return `<div class="col">${Array.from({ length: 24 }, (_, i) => `<i class="${i < lit ? "on" : ""}${i < lit && i > 14 ? " hot" : ""}"></i>`).join("")}</div>`;
+  }).join("");
+  $("#cores").innerHTML = coreLoad.map((v, i) => `<div class="core">${meter(v, 12, v > 75 ? C.nova : i < 10 ? C.teal : C.aurora)}<span>${i < 10 ? "P" : "E"}${i < 10 ? i + 1 : i - 9}</span></div>`).join("");
+  $("#netIn").textContent = fmtRate(net.in); $("#netOut").textContent = fmtRate(net.out);
+  $("#diskR").textContent = fmtRate(disk.r); $("#diskW").textContent = fmtRate(disk.w);
+  comets.net.push(net.in / 9000); comets.disk.push(disk.r / 40000);
+}
+function drawComet(id, arr, col, t) {
+  const cv = $(id), x = cv.getContext("2d"), W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  if (cv.width !== W * devicePixelRatio) { cv.width = W * devicePixelRatio; cv.height = H * devicePixelRatio; }
+  x.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); x.clearRect(0, 0, W, H);
+  while (arr.length > 40) arr.shift();
+  arr.forEach((v, i) => {
+    const px = W - (arr.length - i) * (W / 40) + 10, py = H / 2 + Math.sin(i * .7 + t / 900) * H * .18;
+    const r = 2 + Math.sqrt(v) * 9;
+    x.globalAlpha = (i / arr.length) * .9; x.fillStyle = col;
+    x.beginPath(); x.arc(px, py, r * (i / arr.length), 0, 7); x.fill();
+  });
+  x.globalAlpha = 1;
+}
+
+const CATS = [
+  { name: "App caches", gb: 6.1 }, { name: "Xcode DerivedData", gb: 4.4 }, { name: "System logs", gb: 1.8 },
+  { name: "Trash", gb: 1.2 }, { name: "Old downloads", gb: .7 }, { name: "iOS simulators", gb: 3.3 }
+].map(c => ({ ...c, found: 0, on: true }));
+let sweepFound = 0, meteors = [], scanState = "idle";
+function renderCats() {
+  $("#cats").innerHTML = CATS.map((c, i) => `<div class="cat"><button class="check" role="checkbox" aria-checked="${c.on}" data-i="${i}" aria-label="${c.name}"></button><span>${c.name}</span><span class="num">${c.found.toFixed(1)} GB</span></div>`).join("");
+  const sel = CATS.filter(c => c.on).reduce((s, c) => s + c.found, 0);
+  $("#sweepTotal").innerHTML = `${sel.toFixed(1)}<small> GB</small>`;
+  const sb = $("#sweepBtn"); sb.disabled = scanState !== "found" || sel === 0; sb.style.opacity = sb.disabled ? .4 : 1;
+  sb.textContent = `Sweep ${sel.toFixed(1)} GB`;
+}
+$("#cats").onclick = e => { const b = e.target.closest(".check"); if (!b) return; CATS[b.dataset.i].on = !CATS[b.dataset.i].on; renderCats(); };
+$("#scanBtn").onclick = () => {
+  if (scanState === "scanning") return;
+  scanState = "scanning"; CATS.forEach(c => c.found = 0); sweepFound = 0;
+  $("#sweepSub").textContent = "scanning ~/Library, caches and developer folders…";
+  const iv = setInterval(() => {
+    let done = true;
+    CATS.forEach(c => { if (c.found < c.gb) { c.found = Math.min(c.gb, c.found + rand(.05, .35)); done = false; } });
+    for (let k = 0; k < 4; k++) meteors.push({ x: rand(0, 1), y: -.05, vx: rand(-.002, .002), vy: rand(.006, .014), r: rand(1, 3.5), mode: "fall" });
+    sweepFound = CATS.reduce((s, c) => s + c.found, 0);
+    renderCats();
+    if (done) { clearInterval(iv); scanState = "found"; $("#sweepSub").textContent = `${sweepFound.toFixed(1)} GB of stardust found in ${CATS.length} places`; renderCats(); }
+  }, 120);
+};
+$("#sweepBtn").onclick = () => {
+  const sel = CATS.filter(c => c.on).reduce((s, c) => s + c.found, 0);
+  meteors.forEach(m => { m.mode = "fly"; m.vx = rand(-.02, .02); m.vy = rand(-.03, -.012); });
+  CATS.forEach(c => { if (c.on) c.found = 0; });
+  scanState = "idle"; renderCats();
+  $("#sweepSub").textContent = `${sel.toFixed(1)} GB swept back into space`;
+  toast(`${sel.toFixed(1)} GB swept`);
+};
+function drawMeteors() {
+  const cv = $("#meteorCanvas"), x = cv.getContext("2d"), W = cv.clientWidth, H = cv.clientHeight;
+  if (!W) return;
+  if (cv.width !== W * devicePixelRatio) { cv.width = W * devicePixelRatio; cv.height = H * devicePixelRatio; }
+  x.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); x.clearRect(0, 0, W, H);
+  const pile = clamp(sweepFound / 20, 0, 1) * H * .28;
+  x.fillStyle = "rgba(19,210,193,.1)"; x.beginPath(); x.ellipse(W / 2, H + 10, W * .45, pile + 12, 0, Math.PI, 0); x.fill();
+  for (let i = 0; i < 12; i++) {
+    x.fillStyle = i % 3 ? "rgba(19,210,193,.35)" : "rgba(255,122,89,.4)";
+    x.fillRect(W * .1 + i * W * .067, H - 4 - (i % 4) * 4 - pile * .6, W * .05, 3);
+  }
+  for (const m of meteors) {
+    m.x += m.vx; m.y += m.vy;
+    if (m.mode === "fall" && m.y > 1 - pile / H - .03) { m.vy = 0; m.vx = 0; m.rest = true; }
+    const px = m.x * W, py = m.y * H;
+    if (!m.rest) {
+      const tail = x.createLinearGradient(px, py, px - m.vx * W * 8, py - m.vy * H * 8);
+      tail.addColorStop(0, m.mode === "fly" ? C.nova : C.teal); tail.addColorStop(1, "rgba(0,0,0,0)");
+      x.strokeStyle = tail; x.lineWidth = m.r; x.lineCap = "round";
+      x.beginPath(); x.moveTo(px, py); x.lineTo(px - m.vx * W * 8, py - m.vy * H * 8); x.stroke();
+    }
+    x.shadowColor = m.rest ? C.teal : C.moon; x.shadowBlur = 9;
+    x.fillStyle = m.rest ? C.teal : C.moon; x.beginPath(); x.arc(px, py, m.r * 1.2, 0, 7); x.fill();
+    x.shadowBlur = 0;
+  }
+  meteors = meteors.filter(m => m.y > -.2 && m.y < 1.2 && m.x > -.2 && m.x < 1.2).slice(-500);
+}
+
+function openPalette() {
+  $("#paletteOverlay").classList.add("on"); $("#paletteInput").value = ""; renderPalette(); $("#paletteInput").focus();
+}
+let palSel = 0, palItems = [];
+function renderPalette() {
+  const q = $("#paletteInput").value.trim().toLowerCase();
+  palItems = allProcs().filter(p => !q || p.name.toLowerCase().includes(q) || String(p.pid).includes(q)).sort((a, b) => b.mem - a.mem).slice(0, 9);
+  palSel = clamp(palSel, 0, palItems.length - 1);
+  $("#paletteList").innerHTML = palItems.map((p, i) => `<li role="option" aria-selected="${i === palSel}" data-i="${i}"><span>${p.name}</span><span>${fmtMem(p.mem)} · ${p.cpu.toFixed(1)}%</span></li>`).join("") || `<li><span>no star by that name</span></li>`;
+}
+function aimAt(p) { $("#paletteOverlay").classList.remove("on"); go("sky"); lock(p); tracking = true; $("#inspTrack").textContent = "Tracking…"; }
+$("#paletteInput").oninput = () => { palSel = 0; renderPalette(); };
+$("#paletteList").onclick = e => { const li = e.target.closest("li[data-i]"); if (li) aimAt(palItems[li.dataset.i]); };
+$("#paletteOverlay").onclick = e => { if (e.target.id === "paletteOverlay") e.target.classList.remove("on"); };
+$("#eclipseOverlay").onclick = e => { if (e.target.id === "eclipseOverlay") closeEclipse(); };
+
+addEventListener("keydown", e => {
+  const pal = $("#paletteOverlay").classList.contains("on");
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); pal ? $("#paletteOverlay").classList.remove("on") : openPalette(); return; }
+  if (e.key === "Escape") { $("#paletteOverlay").classList.remove("on"); closeEclipse(); lock(null); return; }
+  if (pal) {
+    if (e.key === "ArrowDown") { palSel++; renderPalette(); e.preventDefault(); }
+    if (e.key === "ArrowUp") { palSel--; renderPalette(); e.preventDefault(); }
+    if (e.key === "Enter" && palItems[palSel]) aimAt(palItems[palSel]);
+    return;
+  }
+  if (document.activeElement.tagName === "INPUT") return;
+  const map = { 1: "sky", 2: "ledger", 3: "giant", 4: "instruments", 5: "sweep" };
+  if (map[e.key]) go(map[e.key]);
+});
+
+let view = "sky";
+function go(v) {
+  view = v;
+  document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === "v-" + v));
+  document.querySelectorAll(".orbit").forEach(b => b.dataset.view === v ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current"));
+  if (v === "ledger") renderLedger();
+  if (v === "giant") renderGiantSide();
+  if (v === "instruments") renderInstruments();
+  if (v === "sweep") renderCats();
+}
+document.querySelectorAll(".orbit").forEach(b => b.onclick = () => go(b.dataset.view));
+
+let toastT;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("on"), 3200); }
+
+function frame(t) {
+  drawDust(t);
+  if (view === "sky") drawSky(t);
+  if (view === "giant") drawGiant(t);
+  if (view === "instruments") { drawComet("#cometNet", comets.net, C.teal, t); drawComet("#cometDisk", comets.disk, C.aurora, t); }
+  if (view === "sweep") drawMeteors();
+  drawEclipse(t);
+  requestAnimationFrame(frame);
+}
+addEventListener("resize", sizeDust);
+sizeDust(); tick(); clock();
+setInterval(tick, 1000); setInterval(clock, 1000);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

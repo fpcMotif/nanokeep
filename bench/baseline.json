@@ -1,0 +1,22 @@
+{
+  "metrics": {
+    "cold_start_ms": { "value": 293.96, "budget": 1250, "target": 35, "ok": true },
+    "page_switch_p50_ms": { "value": 6.93, "budget": 9, "target": 0.28, "ok": true },
+    "page_switch_p95_ms": { "value": 7.21, "budget": 18, "target": 0.28, "ok": true },
+    "hover_p50_ms": { "value": 6.98, "budget": 9, "target": 0.28, "ok": true },
+    "hover_p95_ms": { "value": 13.63, "budget": 17, "target": 0.29, "ok": true },
+    "scroll_p50_ms": { "value": 7.09, "budget": 9, "target": 0.28, "ok": true },
+    "scroll_p95_ms": { "value": 13.63, "budget": 17, "target": 0.28, "ok": true },
+    "sample_p50_ms": { "value": 40.23, "budget": 52, "target": 1.36, "ok": true },
+    "sample_p95_ms": { "value": 44.39, "budget": 58, "target": 1.65, "ok": true },
+    "idle_mb": { "value": 238.92, "budget": 300, "target": 40, "ok": true },
+    "scan_ms": { "value": 77.48, "budget": 77, "target": 40, "ok": false },
+    "scan_peak_mb": { "value": 241.86, "budget": 303, "target": 60, "ok": true },
+    "repeat_scan_ms": { "value": 31.18, "budget": 61, "target": 1.4, "ok": true },
+    "cycle_growth_mb": { "value": 0.48, "budget": 3, "target": 2, "ok": true },
+    "hidden_mb": { "value": 69.16, "budget": 88, "target": 20, "ok": true },
+    "show_ms": { "value": null, "budget": 375, "target": 2.9, "ok": false },
+    "peak_mb": { "value": 242.28, "budget": 327, "target": 60, "ok": true },
+    "leaks": { "value": 0.00, "budget": 0, "target": 0, "ok": true }
+  }
+}
