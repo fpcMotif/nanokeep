@@ -22,8 +22,8 @@ against the code. Findings 1 to 6 of the audit became the six plans here.
 | [007](007-quit-refuses-session-processes-and-reused-pids.md) | Quit refuses session processes and never signals a reused pid | P1 | S | 001 | DONE (merged to main via PR #11) |
 | [008](008-quit-asks-apps-and-confirms-exit.md) | Quit asks apps the AppKit way and confirms that the process exited | P1 | M | 007 | DONE (merged to main via PR #11) |
 | [009](009-hash-group-keys-once-and-count-threads-on-demand.md) | A table build hashes each process once, and thread counts are read only where shown | P2 | S | 008 | DONE (merged to main via PR #11) |
-| [010](010-read-processes-off-the-main-thread.md) | Per-process system calls run on a reader thread, not the main thread | P3 | M | 009 | TODO |
-| [011](011-measure-wake-frame-and-glass-sidebar.md) | The bench measures the first frame after rest, and the glass sidebar's cost is known | P2 | S | 001, after 010 | TODO |
+| [010](010-read-processes-off-the-main-thread.md) | Per-process system calls run on a reader thread, not the main thread | P3 | M | 009 | DONE (Step 1/7 bench skipped: WindowNotVisible/WindowOccluded; 88/88 tests x5) |
+| [011](011-measure-wake-frame-and-glass-sidebar.md) | The bench measures the first frame after rest, and the glass sidebar's cost is known | P2 | S | 001, after 010 | BLOCKED (WindowNotVisible/WindowOccluded: requires uncovered desktop window on active Space) |
 
 GitHub issues: 001 is [#3](https://github.com/fpcMotif/nanokeep/issues/3), 002 is [#4](https://github.com/fpcMotif/nanokeep/issues/4),
 003 is [#5](https://github.com/fpcMotif/nanokeep/issues/5), 004 is [#6](https://github.com/fpcMotif/nanokeep/issues/6),

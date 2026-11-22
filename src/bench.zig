@@ -37,6 +37,8 @@ const budgets = [_]measure.Budget{
     .{ .name = "hover_rebuilds", .budget = 0, .target = 0 },
     .{ .name = "sample_p50_ms", .budget = 6, .target = 1.36 },
     .{ .name = "sample_p95_ms", .budget = 8, .target = 1.65 },
+    .{ .name = "sample_main_p50_ms", .budget = 4, .target = 1 },
+    .{ .name = "sample_main_p95_ms", .budget = 6, .target = 1.5 },
     .{ .name = "keystroke_p50_ms", .budget = 0.5, .target = 0.01 },
     .{ .name = "keystroke_p95_ms", .budget = 1, .target = 0.05 },
     .{ .name = "idle_mb", .budget = 70, .target = 40 },
@@ -209,13 +211,21 @@ const Bench = struct {
 
     fn sampling(b: *Bench) !void {
         var times: [20]f64 = undefined;
-        for (&times) |*s| {
+        var applies: [20]f64 = undefined;
+        b.a.async_sampling = false;
+        defer b.a.async_sampling = true;
+        for (&times, &applies) |*s, *m| {
             b.a.last = @import("app.zig").never_sampled;
             const t = seconds();
             _ = b.a.tick(t);
             s.* = ms(t);
+            b.a.sampler.reading.read(b.a.sampler.count_threads);
+            const applied = seconds();
+            b.a.finishSample(b.a.sampler.reading.items.items, applied);
+            m.* = ms(applied);
         }
         try b.putStats("sample", &times);
+        try b.putStats("sample_main", &applies);
     }
 
     fn keystrokes(b: *Bench) !void {

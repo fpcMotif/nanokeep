@@ -901,6 +901,23 @@ test "a reading taken apart from the sampler applies to the same result as a sam
     try std.testing.expectEqual(@as(u32, 0), s.find(s.self_pid).?.threads);
 }
 
+test "with a reader thread, a tick starts a sample and the main queue finishes it" {
+    var a: App = .init(gpa, "/nonexistent-home", "", &.{});
+    defer a.deinit();
+    a.async_sampling = true;
+    _ = a.tick(10);
+    try std.testing.expectEqual(@as(usize, 0), a.sampler.samples);
+    var spins: usize = 0;
+    while (a.sampler.samples == 0 and spins < max_spins) : (spins += 1) spin();
+    try std.testing.expectEqual(@as(usize, 1), a.sampler.samples);
+    try std.testing.expect(a.sampler.find(a.sampler.self_pid) != null);
+    try std.testing.expect(a.everyone.groups.items.len > 0);
+    _ = a.tick(20);
+    spins = 0;
+    while (a.sampler.samples == 1 and spins < max_spins) : (spins += 1) spin();
+    try std.testing.expectEqual(@as(usize, 2), a.sampler.samples);
+}
+
 test "thread counts are read only on the pages that show them, and at once when one opens" {
     var a: App = .init(gpa, "/nonexistent-home", "", &.{});
     defer a.deinit();

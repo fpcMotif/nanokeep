@@ -116,6 +116,8 @@ pub const App = struct {
     trash_app: cleaner.TrashFn = nanoui.shell.trash,
     terminate_app: *const fn (i32, []const u8) bool = terminateApp,
     alive: *const fn (i32, u64) bool = procs.alive,
+    async_sampling: bool = false,
+    reader: ?*Reader = null,
     leaving: [max_leaving]Leaving = undefined,
     leaving_count: usize = 0,
     guide: ?fda.Guide = null,
@@ -142,6 +144,8 @@ pub const App = struct {
     }
 
     pub fn deinit(a: *App) void {
+        if (a.reader) |r| r.close();
+        a.reader = null;
         if (a.guide) |*g| g.deinit();
         a.machine.deinit();
         a.metrics.deinit();
@@ -252,7 +256,33 @@ pub const App = struct {
     }
 
     fn sample(a: *App, t: f64) void {
+        if (a.async_sampling) if (a.readerThread()) |r| {
+            r.request(t, a.sampler.count_threads);
+            a.last = t;
+            return;
+        };
         a.sampler.sample(t);
+        a.sampled(t);
+    }
+
+    fn readerThread(a: *App) ?*Reader {
+        if (a.reader) |r| return r;
+        const r = a.gpa.create(Reader) catch return null;
+        r.* = .{ .gpa = a.gpa, .app = a, .reading = .{ .gpa = a.gpa } };
+        r.thread = std.Thread.spawn(.{}, Reader.work, .{r}) catch {
+            a.gpa.destroy(r);
+            return null;
+        };
+        a.reader = r;
+        return r;
+    }
+
+    pub fn finishSample(a: *App, raws: []const procs.Raw, t: f64) void {
+        a.sampler.apply(raws, t);
+        a.sampled(t);
+    }
+
+    fn sampled(a: *App, t: f64) void {
         a.metrics.sample(t, a.sampler.system.power);
         a.awake_count = iokit.assertions(&a.awake);
         a.everyone.build(a.sampler.procs.items, .{ .show = .all, .sort = .memory, .uid = a.sampler.uid }, &no_expanded) catch {};
@@ -506,3 +536,70 @@ fn terminateApp(pid: i32, bundle: []const u8) bool {
     if (!std.mem.eql(u8, objc.fromNSString(objc.msg(?objc.Object, url, "path", .{})), bundle)) return false;
     return objc.msg(objc.BOOL, running, "terminate", .{});
 }
+
+const Reader = struct {
+    gpa: std.mem.Allocator,
+    app: *App,
+    reading: procs.Reading,
+    thread: ?std.Thread = null,
+    mutex: std.c.pthread_mutex_t = std.c.PTHREAD_MUTEX_INITIALIZER,
+    cond: std.c.pthread_cond_t = std.c.PTHREAD_COND_INITIALIZER,
+    wanted: bool = false,
+    stop: bool = false,
+    count_threads: bool = true,
+    posted: bool = false,
+    busy: bool = false,
+    orphan: bool = false,
+    at: f64 = 0,
+
+    fn request(r: *Reader, t: f64, count_threads: bool) void {
+        if (r.busy) return;
+        r.busy = true;
+        _ = std.c.pthread_mutex_lock(&r.mutex);
+        r.at = t;
+        r.count_threads = count_threads;
+        r.wanted = true;
+        _ = std.c.pthread_cond_signal(&r.cond);
+        _ = std.c.pthread_mutex_unlock(&r.mutex);
+    }
+
+    fn work(r: *Reader) void {
+        while (true) {
+            _ = std.c.pthread_mutex_lock(&r.mutex);
+            while (!r.wanted and !r.stop) _ = std.c.pthread_cond_wait(&r.cond, &r.mutex);
+            const stop = r.stop;
+            const count_threads = r.count_threads;
+            r.wanted = false;
+            if (!stop) r.posted = true;
+            _ = std.c.pthread_mutex_unlock(&r.mutex);
+            if (stop) return;
+            r.reading.read(count_threads);
+            nanoui.objc.dispatchMain(r, arrived);
+        }
+    }
+
+    fn arrived(ctx: ?*anyopaque) callconv(.c) void {
+        const r: *Reader = @ptrCast(@alignCast(ctx));
+        if (r.orphan) return r.free();
+        r.posted = false;
+        r.busy = false;
+        r.app.finishSample(r.reading.items.items, r.at);
+        if (r.app.window) |w| w.redraw();
+    }
+
+    fn close(r: *Reader) void {
+        if (r.thread) |th| {
+            _ = std.c.pthread_mutex_lock(&r.mutex);
+            r.stop = true;
+            _ = std.c.pthread_cond_signal(&r.cond);
+            _ = std.c.pthread_mutex_unlock(&r.mutex);
+            th.join();
+        }
+        if (r.posted) r.orphan = true else r.free();
+    }
+
+    fn free(r: *Reader) void {
+        r.reading.deinit();
+        r.gpa.destroy(r);
+    }
+};

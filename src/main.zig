@@ -15,6 +15,7 @@ pub fn seconds() f64 {
 pub fn start(a: *App, app: *nanoui.App) !*nanoui.Window {
     a.listen();
     a.clock = seconds;
+    a.async_sampling = true;
     a.machine.read();
     a.machine.lookUpName();
     a.usage.load();
