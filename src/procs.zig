@@ -210,6 +210,54 @@ const Known = struct {
     seen: usize,
 };
 
+pub const Raw = struct {
+    pid: i32,
+    readable: bool = false,
+    start: u64 = 0,
+    uuid: [16]u8 = @splat(0),
+    cpu_ticks: u64 = 0,
+    disk: u64 = 0,
+    energy: u64 = 0,
+    memory: u64 = 0,
+    threads: u32 = 0,
+};
+
+pub const Reading = struct {
+    gpa: std.mem.Allocator,
+    pids: []c_int = &.{},
+    items: std.ArrayList(Raw) = .empty,
+
+    pub fn deinit(r: *Reading) void {
+        r.items.deinit(r.gpa);
+        if (r.pids.len > 0) r.gpa.free(r.pids);
+    }
+
+    pub fn read(r: *Reading, count_threads: bool) void {
+        r.items.clearRetainingCapacity();
+        if (r.pids.len == 0) r.pids = r.gpa.alloc(c_int, max_pids) catch return;
+        const got = proc_listallpids(r.pids.ptr, @intCast(r.pids.len * @sizeOf(c_int)));
+        const n: usize = @min(r.pids.len, @as(usize, @intCast(@max(0, got))));
+        r.items.ensureTotalCapacity(r.gpa, n) catch return;
+        var ru: Rusage = undefined;
+        var ti: TaskInfo = undefined;
+        for (r.pids[0..n]) |pid| {
+            if (pid <= 0) continue;
+            var raw: Raw = .{ .pid = pid };
+            if (proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) == 0) {
+                raw.readable = true;
+                raw.start = ru.proc_start_abstime;
+                raw.uuid = ru.uuid;
+                raw.cpu_ticks = ru.user_time + ru.system_time;
+                raw.disk = ru.diskio_bytesread + ru.diskio_byteswritten;
+                raw.energy = ru.energy_nj;
+                raw.memory = ru.phys_footprint;
+                if (count_threads and proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti, @sizeOf(TaskInfo)) == @sizeOf(TaskInfo)) raw.threads = @intCast(@max(0, ti.threadnum));
+            }
+            r.items.appendAssumeCapacity(raw);
+        }
+    }
+};
+
 pub const Sampler = struct {
     gpa: std.mem.Allocator,
     procs: std.ArrayList(Proc) = .empty,
@@ -225,7 +273,7 @@ pub const Sampler = struct {
     count_threads: bool = true,
     num: u64 = 0,
     den: u64 = 1,
-    pids: []c_int = &.{},
+    reading: Reading,
     uid: u32 = 0,
     self_pid: i32 = 0,
     home: [:0]const u8 = "/",
@@ -236,7 +284,7 @@ pub const Sampler = struct {
         var total: u64 = 0;
         var len: usize = @sizeOf(u64);
         _ = sysctlbyname("hw.memsize", &total, &len, null, 0);
-        return .{ .gpa = gpa, .num = tb[0], .den = @max(1, tb[1]), .uid = getuid(), .self_pid = getpid(), .home = home, .system = .{ .mem_total = total } };
+        return .{ .gpa = gpa, .num = tb[0], .den = @max(1, tb[1]), .reading = .{ .gpa = gpa }, .uid = getuid(), .self_pid = getpid(), .home = home, .system = .{ .mem_total = total } };
     }
 
     pub fn deinit(s: *Sampler) void {
@@ -248,7 +296,7 @@ pub const Sampler = struct {
         var it = s.users.valueIterator();
         while (it.next()) |u| s.gpa.free(u.*);
         s.users.deinit(s.gpa);
-        if (s.pids.len > 0) s.gpa.free(s.pids);
+        s.reading.deinit();
     }
 
     pub fn userName(s: *Sampler, uid: u32) []const u8 {
@@ -263,40 +311,37 @@ pub const Sampler = struct {
     }
 
     pub fn sample(s: *Sampler, now: f64) void {
-        if (s.pids.len == 0) s.pids = s.gpa.alloc(c_int, max_pids) catch return;
-        const got = proc_listallpids(s.pids.ptr, @intCast(s.pids.len * @sizeOf(c_int)));
-        const n: usize = @min(s.pids.len, @as(usize, @intCast(@max(0, got))));
+        s.reading.read(s.count_threads);
+        s.apply(s.reading.items.items, now);
+    }
+
+    pub fn apply(s: *Sampler, raws: []const Raw, now: f64) void {
         s.procs.clearRetainingCapacity();
-        s.procs.ensureTotalCapacity(s.gpa, n) catch return;
-        s.cache.ensureUnusedCapacity(s.gpa, @intCast(n)) catch return;
+        s.procs.ensureTotalCapacity(s.gpa, raws.len) catch return;
+        s.cache.ensureUnusedCapacity(s.gpa, @intCast(raws.len)) catch return;
         s.gone.ensureTotalCapacity(s.gpa, s.cache.count()) catch return;
         const wall = now - s.prev_wall;
         const gen = s.samples + 1;
         s.system.power = 0;
         s.system.threads = 0;
-        var ru: Rusage = undefined;
-        var ti: TaskInfo = undefined;
-        for (s.pids[0..n]) |pid| {
-            if (pid <= 0) continue;
-            const readable = proc_pid_rusage(pid, RUSAGE_INFO_V6, &ru) == 0;
-            const k = s.lookUp(pid, if (readable) ru.proc_start_abstime else 0, if (readable) ru.uuid else @splat(0)) orelse continue;
+        for (raws) |raw| {
+            const k = s.lookUp(raw.pid, raw.start, raw.uuid) orelse continue;
             k.seen = gen;
-            var p: Proc = .{ .pid = pid, .uid = k.uid, .name = k.name, .bundle = k.bundle, .user = k.user };
-            if (readable) {
-                const t = (ru.user_time + ru.system_time) * s.num / s.den;
-                const disk = ru.diskio_bytesread + ru.diskio_byteswritten;
-                p.memory = ru.phys_footprint;
+            var p: Proc = .{ .pid = raw.pid, .uid = k.uid, .name = k.name, .bundle = k.bundle, .user = k.user };
+            if (raw.readable) {
+                const t = raw.cpu_ticks * s.num / s.den;
+                p.memory = raw.memory;
                 p.cpu_time_ns = t;
                 p.known = true;
-                if (s.count_threads and proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &ti, @sizeOf(TaskInfo)) == @sizeOf(TaskInfo)) p.threads = @intCast(@max(0, ti.threadnum));
+                p.threads = raw.threads;
                 if (s.samples > 0 and wall > 0) if (k.prev) |before| {
                     const wall_ns = wall * std.time.ns_per_s;
                     p.cpu = @floatCast(@as(f64, @floatFromInt(t -| before.time_ns)) / wall_ns * percent);
-                    p.disk_rate = @floatCast(@as(f64, @floatFromInt(disk -| before.disk)) / wall);
-                    p.energy = @floatCast(@as(f64, @floatFromInt(ru.energy_nj -| before.energy)) / wall_ns);
+                    p.disk_rate = @floatCast(@as(f64, @floatFromInt(raw.disk -| before.disk)) / wall);
+                    p.energy = @floatCast(@as(f64, @floatFromInt(raw.energy -| before.energy)) / wall_ns);
                     s.system.power += p.energy;
                 };
-                k.prev = .{ .time_ns = t, .disk = disk, .energy = ru.energy_nj };
+                k.prev = .{ .time_ns = t, .disk = raw.disk, .energy = raw.energy };
             }
             s.system.threads += p.threads;
             s.procs.appendAssumeCapacity(p);

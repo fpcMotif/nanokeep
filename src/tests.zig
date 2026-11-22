@@ -879,6 +879,28 @@ test "the sampler reads this machine" {
     try std.testing.expect(s.system.disk_total > s.system.disk_free);
 }
 
+test "a reading taken apart from the sampler applies to the same result as a sample" {
+    var s: procs.Sampler = .init(gpa, "/");
+    defer s.deinit();
+    var r: procs.Reading = .{ .gpa = gpa };
+    defer r.deinit();
+    r.read(true);
+    s.apply(r.items.items, 0);
+    r.read(true);
+    s.apply(r.items.items, 1);
+    const fewest_procs = 10;
+    try std.testing.expect(s.procs.items.len > fewest_procs);
+    try std.testing.expectEqual(@as(usize, 2), s.samples);
+    const me = s.find(s.self_pid).?;
+    try std.testing.expect(me.known);
+    try std.testing.expect(me.threads >= 1);
+    try std.testing.expect(me.cpu_time_ns > 0);
+    try std.testing.expect(me.memory > 0);
+    r.read(false);
+    s.apply(r.items.items, 2);
+    try std.testing.expectEqual(@as(u32, 0), s.find(s.self_pid).?.threads);
+}
+
 test "thread counts are read only on the pages that show them, and at once when one opens" {
     var a: App = .init(gpa, "/nonexistent-home", "", &.{});
     defer a.deinit();
