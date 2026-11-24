@@ -44,15 +44,14 @@ pub const Spec = struct {
     desc: []const u8,
     note: []const u8,
     doing: []const u8,
-    color: u24,
     sources: []const Source,
     forever: bool = false,
     selected: bool = true,
 };
 
 pub const specs = [_]Spec{
-    .{ .kind = .caches, .title = "Caches", .desc = "Apps make them again as they need them", .note = "Open apps may rebuild some of them right away.", .doing = "Measuring caches…", .color = 0x0a84ff, .sources = &.{.{ .dir = "Library/Caches", .filter = .not_apple }} },
-    .{ .kind = .packages, .title = "Package Caches", .desc = "Downloads package managers fetch again as they install", .note = "The next install downloads these packages again.", .doing = "Measuring package caches…", .color = 0xff6b00, .selected = false, .sources = &.{
+    .{ .kind = .caches, .title = "Caches", .desc = "Apps make them again as they need them", .note = "Open apps may rebuild some of them right away.", .doing = "Measuring caches…", .sources = &.{.{ .dir = "Library/Caches", .filter = .not_apple }} },
+    .{ .kind = .packages, .title = "Package Caches", .desc = "Downloads package managers fetch again as they install", .note = "The next install downloads these packages again.", .doing = "Measuring package caches…", .selected = false, .sources = &.{
         .{ .dir = ".npm/_cacache" },
         .{ .dir = ".bun/install/cache" },
         .{ .dir = ".cache/uv" },
@@ -60,7 +59,7 @@ pub const specs = [_]Spec{
         .{ .dir = ".cargo/registry/cache" },
         .{ .dir = ".gradle/caches" },
     } },
-    .{ .kind = .developer, .title = "Developer", .desc = "Xcode's builds, and git worktrees with nothing to commit", .note = "Xcode builds from scratch the next time. Git removes the worktrees and the ignored files in them. Commits on a branch or tag stay.", .doing = "Measuring git worktrees…", .color = 0xff375f, .selected = false, .sources = &.{
+    .{ .kind = .developer, .title = "Developer", .desc = "Xcode's builds, and git worktrees with nothing to commit", .note = "Xcode builds from scratch the next time. Git removes the worktrees and the ignored files in them. Commits on a branch or tag stay.", .doing = "Measuring git worktrees…", .selected = false, .sources = &.{
         .{ .dir = "Library/Developer/Xcode/DerivedData" },
         .{ .dir = "Library/Developer/Xcode/iOS DeviceSupport" },
         .{ .dir = "Library/Developer/Xcode/macOS DeviceSupport" },
@@ -68,15 +67,15 @@ pub const specs = [_]Spec{
         .{ .dir = "Library/Developer/CoreSimulator/Caches" },
         .{ .kind = .worktrees },
     } },
-    .{ .kind = .agents, .title = "Agent Sessions", .desc = "Claude Code's and Codex's sessions over a month old", .note = "You can't resume these conversations after they go.", .doing = "Looking through agent sessions…", .color = 0x5ac8fa, .selected = false, .sources = &.{
+    .{ .kind = .agents, .title = "Agent Sessions", .desc = "Claude Code's and Codex's sessions over a month old", .note = "You can't resume these conversations after they go.", .doing = "Looking through agent sessions…", .selected = false, .sources = &.{
         .{ .dir = ".claude/projects", .kind = .sessions },
         .{ .dir = ".codex/sessions", .kind = .sessions },
         .{ .dir = ".codex/archived_sessions", .kind = .sessions },
     } },
-    .{ .kind = .installers, .title = "Installers", .desc = "Disk images and packages left in Downloads", .note = "Download them again to install the apps again.", .doing = "Looking for installers in Downloads…", .color = 0xa2845e, .selected = false, .sources = &.{.{ .dir = "Downloads", .filter = .installer }} },
-    .{ .kind = .logs, .title = "Logs", .desc = "Apps' logs and crash reports", .note = "Crash reports you have not sent go too.", .doing = "Measuring logs…", .color = 0xff9f0a, .sources = &.{.{ .dir = "Library/Logs" }} },
-    .{ .kind = .temporary, .title = "Temporary Files", .desc = "Left by apps, unchanged for three days", .note = "Only files nothing changed for three days.", .doing = "Measuring temporary files…", .color = 0x30b0c7, .sources = &.{.{ .kind = .temp, .filter = .not_apple }} },
-    .{ .kind = .trash, .title = "Trash", .desc = "Deleted for good", .note = "What is in the Trash is deleted for good.", .doing = "Measuring the Trash…", .color = 0x8e8e93, .forever = true, .selected = false, .sources = &.{.{ .dir = ".Trash" }} },
+    .{ .kind = .installers, .title = "Installers", .desc = "Disk images and packages left in Downloads", .note = "Download them again to install the apps again.", .doing = "Looking for installers in Downloads…", .selected = false, .sources = &.{.{ .dir = "Downloads", .filter = .installer }} },
+    .{ .kind = .logs, .title = "Logs", .desc = "Apps' logs and crash reports", .note = "Crash reports you have not sent go too.", .doing = "Measuring logs…", .sources = &.{.{ .dir = "Library/Logs" }} },
+    .{ .kind = .temporary, .title = "Temporary Files", .desc = "Left by apps, unchanged for three days", .note = "Only files nothing changed for three days.", .doing = "Measuring temporary files…", .sources = &.{.{ .kind = .temp, .filter = .not_apple }} },
+    .{ .kind = .trash, .title = "Trash", .desc = "Deleted for good", .note = "What is in the Trash is deleted for good.", .doing = "Measuring the Trash…", .forever = true, .selected = false, .sources = &.{.{ .dir = ".Trash" }} },
 };
 
 pub const Item = struct {

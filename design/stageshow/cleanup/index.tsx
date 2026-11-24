@@ -16,14 +16,14 @@ import './cleanup.css'
 type Phase = 'idle' | 'cleaning' | 'done'
 type S = { dev: boolean; cleaned: boolean[]; phase: Phase; scanning: boolean }
 
-type Category = { id: string; title: string; desc: string; gb: number; color: string; icon: ComponentType<LucideProps>; on?: boolean }
+type Category = { id: string; title: string; desc: string; gb: number; color: string; dot?: string; icon: ComponentType<LucideProps>; on?: boolean }
 
 const ROWS: Category[] = [
-  { id: 'caches', title: 'Caches', desc: 'Apps make them again as they need them', gb: 2.1, color: '#0a84ff', icon: Archive, on: true },
-  { id: 'developer', title: 'Developer', desc: "Xcode's builds and idle git worktrees", gb: 5.4, color: '#ff375f', icon: Hammer },
-  { id: 'logs', title: 'Logs', desc: "Apps' logs and crash reports", gb: 0.64, color: '#ff9f0a', icon: FileText, on: true },
-  { id: 'packages', title: 'Package Caches', desc: 'Downloads package managers fetch again', gb: 1.4, color: '#ff6b00', icon: Package },
-  { id: 'agents', title: 'Agent Sessions', desc: "Claude Code's and Codex's old sessions", gb: 0, color: '#5ac8fa', icon: MessagesSquare },
+  { id: 'caches', title: 'Caches', desc: 'Apps make them again as they need them', gb: 2.1, color: '#9536d6', icon: Archive, on: true },
+  { id: 'developer', title: 'Developer', desc: "Xcode's builds and idle git worktrees", gb: 5.4, color: '#5e9a2c', icon: Hammer },
+  { id: 'logs', title: 'Logs', desc: "Apps' logs and crash reports", gb: 0.64, color: '#c9853a', dot: '#e4c29c', icon: FileText, on: true },
+  { id: 'packages', title: 'Package Caches', desc: 'Downloads package managers fetch again', gb: 1.4, color: '#c9853a', icon: Package },
+  { id: 'agents', title: 'Agent Sessions', desc: "Claude Code's and Codex's old sessions", gb: 0, color: '#f5a623', icon: MessagesSquare },
 ]
 const DEV = 1
 const PICKED = [0, 1, 2]
@@ -43,7 +43,7 @@ function dotColors(s: S, count: number) {
   const order = [0, 3, 1, 2]
   for (const i of order) {
     if (s.cleaned[i]) continue
-    for (let n = 0; n < Math.round(ROWS[i].gb * 10); n++) out.push(ROWS[i].color)
+    for (let n = 0; n < Math.round(ROWS[i].gb * 10); n++) out.push(ROWS[i].dot ?? ROWS[i].color)
   }
   for (let n = 0; n < OTHER; n++) out.push('var(--nk-dot-other)')
   while (out.length < count) out.push('var(--nk-dot-free)')
@@ -69,16 +69,16 @@ async function script(a: Act<S>) {
   await a.wait(1000)
 
   a.mark('clean')
-  await a.move({ at: 'clean', x: 0.78, y: 0.62 })
+  await a.move({ at: 'clean', x: 0.5, y: 0.86 })
   await a.wait(200)
   await a.click()
   await a.set({ phase: 'cleaning' })
-  await a.wait(500)
+  await a.wait(450)
   for (const i of PICKED) {
     await a.set((s) => ({ cleaned: s.cleaned.map((c, j) => c || j === i) }))
-    await a.wait(260)
+    await a.wait(450)
   }
-  await a.wait(200)
+  await a.wait(250)
   a.mark('done')
   await a.set({ phase: 'done' })
   await a.move('rest')
@@ -89,24 +89,25 @@ async function script(a: Act<S>) {
   await a.move({ at: 'rescan', x: 0.5, y: 0.55 })
   await a.wait(150)
   await a.click()
-  await a.set({ scanning: true, phase: 'idle', dev: false })
-  await a.wait(300)
-  await a.set({ cleaned: NONE })
+  await a.set({ scanning: true })
+  await a.wait(350)
+  await a.set({ phase: 'idle', dev: false, cleaned: NONE })
   await a.move('home')
+  await a.wait(300)
   await a.set({ scanning: false })
-  await a.wait(500)
+  await a.wait(300)
 }
 
-const NAV: { label: string; icon: ComponentType<LucideProps>; tint: string; figure?: string; section?: string }[] = [
-  { label: 'Overview', icon: LayoutGrid, tint: '#636366' },
-  { label: 'Processes', icon: List, tint: '#8e8e93', figure: '849' },
-  { label: 'CPU', icon: Cpu, tint: '#0a84ff', figure: '33%', section: 'Hardware' },
-  { label: 'Memory', icon: MemoryStick, tint: '#30d158', figure: '84%' },
-  { label: 'Disk', icon: HardDrive, tint: '#ff9f0a', figure: '786 KB/s' },
-  { label: 'Network', icon: Globe, tint: '#30b0c7', figure: '25 KB/s' },
-  { label: 'Apps', icon: Grid3x3, tint: '#8e8e93', figure: '214', section: 'System' },
-  { label: 'Cleanup', icon: Sparkles, tint: '#ff9f0a' },
-  { label: 'About This Mac', icon: Laptop, tint: '#8e8e93' },
+const NAV: { label: string; icon: ComponentType<LucideProps>; figure?: string; section?: string }[] = [
+  { label: 'Overview', icon: LayoutGrid },
+  { label: 'Processes', icon: List, figure: '849' },
+  { label: 'CPU', icon: Cpu, figure: '33%', section: 'Hardware' },
+  { label: 'Memory', icon: MemoryStick, figure: '84%' },
+  { label: 'Disk', icon: HardDrive, figure: '786 KB/s' },
+  { label: 'Network', icon: Globe, figure: '25 KB/s' },
+  { label: 'Apps', icon: Grid3x3, figure: '214', section: 'System' },
+  { label: 'Cleanup', icon: Sparkles },
+  { label: 'About This Mac', icon: Laptop },
 ]
 
 function Sidebar({ total }: { total: number }) {
@@ -119,8 +120,8 @@ function Sidebar({ total }: { total: number }) {
           <div key={n.label} className="nk-nav-group">
             {n.section && <div className="nk-nav-section">{n.section}</div>}
             <div className="nk-nav-item" data-on={on || undefined}>
-              <span className="nk-tile" style={{ background: n.tint }}>
-                <Glyph size={12} strokeWidth={2.25} absoluteStrokeWidth />
+              <span className="nk-nav-icon">
+                <Glyph size={14} strokeWidth={1.75} absoluteStrokeWidth />
               </span>
               <span className="nk-nav-label">{n.label}</span>
               <span className="nk-nav-figure">{on ? <Roll align="end" delay={400}>{size(total)}</Roll> : n.figure}</span>
@@ -149,7 +150,7 @@ export default function NanokeepCleanup() {
       initial={initial}
       poster={POSTER}
       script={script}
-      accent="#f5458f"
+      accent="#9536d6"
       greys="cool"
       fidelity="realistic"
       cursor={{ at: { wide: { x: HOME.wide.left, y: HOME.wide.top }, compact: { x: HOME.compact.left, y: HOME.compact.top } } }}
@@ -158,7 +159,7 @@ export default function NanokeepCleanup() {
       {(s, _rect, layout) => {
         // The totals hold while rows empty, then land once the clean is done
         const was = s.phase === 'cleaning' ? { ...s, cleaned: NONE } : s
-        const total = found(was)
+        const total = found(s)
         const pick = chosen(was)
         const items = ROWS.filter((_, i) => isOn(was, i)).length
         const freed = ROWS.reduce((n, r, i) => n + (s.cleaned[i] ? r.gb : 0), 0)
@@ -172,7 +173,7 @@ export default function NanokeepCleanup() {
             <Window
               className="nk-win"
               title="Cleanup"
-              sidebar={layout === 'wide' ? <Sidebar total={total} /> : undefined}
+              sidebar={layout === 'wide' ? <Sidebar total={found(was)} /> : undefined}
               sidebarWidth={176}
               toolbar={
                 <Button className="nk-rescan" data-target="rescan" data-spin={s.scanning || undefined} variant="secondary" size="medium" icon={<RotateCw size={14} strokeWidth={1.75} absoluteStrokeWidth />} aria-label="Scan Again" />
@@ -187,7 +188,7 @@ export default function NanokeepCleanup() {
                   <div className="nk-figures">
                     <div className="nk-label">Found to clean</div>
                     <div className="nk-total">
-                      <Count value={total} format={(n) => n.toFixed(1)} duration={900} />
+                      <Count value={total} format={(n) => n.toFixed(1)} duration={600} />
                       <span className="nk-unit">GB</span>
                     </div>
                     <div className="nk-sub">
@@ -213,7 +214,7 @@ export default function NanokeepCleanup() {
                   return (
                     <div key={r.id} className="nk-row" data-gone={gone || undefined}>
                       {empty ? <span /> : <Checkbox on={isOn(s, i)} data-target={`check-${r.id}`} data-cursor="pointer" />}
-                      <span className="nk-row-tile" style={{ color: r.color, background: `color-mix(in srgb, ${r.color} 14%, transparent)` }}>
+                      <span className="nk-row-tile" style={{ color: r.color, background: `color-mix(in srgb, ${r.color} 16%, transparent)` }}>
                         <Glyph size={11} strokeWidth={2} absoluteStrokeWidth />
                       </span>
                       <span className="nk-row-text">

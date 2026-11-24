@@ -4,6 +4,7 @@ const ui = nanoui.ui;
 const kit = nanoui.kit;
 const apps = @import("apps.zig");
 const table = @import("view_table.zig");
+const theme = @import("theme.zig");
 const view = @import("view.zig");
 const app_mod = @import("app.zig");
 const App = app_mod.App;
@@ -55,6 +56,10 @@ pub fn page(c: *ui.Context, a: *App) void {
         @import("view_card.zig").emptyList(c, "magnifyingglass", "No Apps Found", c.print("Nothing matches “{s}”.", .{query}));
         return;
     }
+    if (a.app_rows.items.len == 0) {
+        @import("view_card.zig").emptyList(c, "square.grid.3x3.fill", "No Apps Here", "nanokeep looks in the Applications folders. Reload after you install one.");
+        return;
+    }
     var rows = ui.list(c, .{ .count = a.app_rows.items.len, .row_height = table.row_h, .padding = .{ .left = 8, .right = 8 } });
     while (rows.next()) |i| row(c, a, a.app_rows.items[i], i, now);
     rows.end();
@@ -66,9 +71,7 @@ fn row(c: *ui.Context, a: *App, index: u32, i: usize, now: i64) void {
     const info = &a.inventory.apps.items[index];
     ui.key(c, info.path);
     const sel = a.app_selected == index;
-    const bg = if (sel) th.accent.alpha(0.2) else if (i % 2 == 1) th.surface_hover.alpha(0.45) else th.background.alpha(0);
-    var d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
-    if (!sel) d = d.hover(th.surface_hover);
+    const d = table.row(c, sel, i);
     defer d.end();
     if (d.clicked()) {
         a.selectApp(index);
@@ -78,7 +81,7 @@ fn row(c: *ui.Context, a: *App, index: u32, i: usize, now: i64) void {
     {
         const s = ui.div(c).row().w(18).h(18).center();
         defer s.end();
-        if (open) table.dot(c, 6, .hex(0x30d158));
+        if (open) table.dot(c, 6, theme.hue(c, .lime));
     }
     {
         const n = table.cell(c, null, false);
@@ -87,7 +90,7 @@ fn row(c: *ui.Context, a: *App, index: u32, i: usize, now: i64) void {
     }
     text(c, if (info.version.len > 0) info.version else "–", cols[1].w, th.muted);
     table.value(c, if (info.measured) view.size(c, info.size.bytes) else "…", cols[2].w, null);
-    text(c, info.kind.title(), cols[3].w, if (info.kind == .intel) ui.Color.hex(0xff9f0a) else th.muted);
+    text(c, info.kind.title(), cols[3].w, if (info.kind == .intel) th.text else th.muted);
     text(c, view.ago(c, now, info.last_opened), cols[4].w, th.muted);
     text(c, if (info.app_store) "App Store" else "Other", cols[5].w, th.muted);
 }

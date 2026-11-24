@@ -47,7 +47,7 @@ pub fn page(c: *ui.Context, a: *App) void {
     const body = ui.div(c).column().wFull().grow().scrollY().px(20).pb(20).gap(14);
     defer body.end();
     {
-        const hero = ui.div(c).row().wFull().px(28).py(24).gap(24).itemsCenter().rounded(card.radius).bg(th.surface).shadow(card.lift);
+        const hero = @import("theme.zig").surface(c, ui.div(c).row().wFull().px(28).py(24).gap(24).itemsCenter(), @import("theme.zig").radius.hero);
         defer hero.end();
         {
             const pic = ui.div(c).row().w(104).h(104).center().rounded(24).bg(th.text.alpha(0.045));
