@@ -18,6 +18,7 @@ const F_OK = 0;
 const stale_seconds = 3 * std.time.s_per_day;
 const max_session_depth = 4;
 const rm_forever = [_][]const u8{ "/bin/rm", "-rf", "--" };
+const forever_batch = 100;
 
 pub const Kind = enum { caches, packages, developer, agents, installers, logs, temporary, trash };
 
@@ -27,6 +28,14 @@ pub const SourceKind = enum { children, worktrees, temp, sessions };
 
 const session_age = 30 * std.time.s_per_day;
 
+fn minAge(kind: Kind) ?i64 {
+    return switch (kind) {
+        .temporary => stale_seconds,
+        .agents => session_age,
+        else => null,
+    };
+}
+
 pub const Source = struct { dir: []const u8 = "", filter: Filter = .any, kind: SourceKind = .children };
 
 pub const Spec = struct {
@@ -35,15 +44,14 @@ pub const Spec = struct {
     desc: []const u8,
     note: []const u8,
     doing: []const u8,
-    color: u24,
     sources: []const Source,
     forever: bool = false,
     selected: bool = true,
 };
 
 pub const specs = [_]Spec{
-    .{ .kind = .caches, .title = "Caches", .desc = "Apps make them again as they need them", .note = "Open apps may rebuild some of them right away.", .doing = "Measuring caches…", .color = 0x0a84ff, .sources = &.{.{ .dir = "Library/Caches", .filter = .not_apple }} },
-    .{ .kind = .packages, .title = "Package Caches", .desc = "Downloads package managers fetch again as they install", .note = "The next install downloads these packages again.", .doing = "Measuring package caches…", .color = 0xff6b00, .selected = false, .sources = &.{
+    .{ .kind = .caches, .title = "Caches", .desc = "Apps make them again as they need them", .note = "Open apps may rebuild some of them right away.", .doing = "Measuring caches…", .sources = &.{.{ .dir = "Library/Caches", .filter = .not_apple }} },
+    .{ .kind = .packages, .title = "Package Caches", .desc = "Downloads package managers fetch again as they install", .note = "The next install downloads these packages again.", .doing = "Measuring package caches…", .selected = false, .sources = &.{
         .{ .dir = ".npm/_cacache" },
         .{ .dir = ".bun/install/cache" },
         .{ .dir = ".cache/uv" },
@@ -51,7 +59,7 @@ pub const specs = [_]Spec{
         .{ .dir = ".cargo/registry/cache" },
         .{ .dir = ".gradle/caches" },
     } },
-    .{ .kind = .developer, .title = "Developer", .desc = "Xcode's builds, and git worktrees with nothing to commit", .note = "Xcode builds from scratch the next time. Git removes the worktrees; their branches and commits stay.", .doing = "Measuring git worktrees…", .color = 0xff375f, .selected = false, .sources = &.{
+    .{ .kind = .developer, .title = "Developer", .desc = "Xcode's builds, and git worktrees with nothing to commit", .note = "Xcode builds from scratch the next time. Git removes the worktrees and the ignored files in them. Commits on a branch or tag stay.", .doing = "Measuring git worktrees…", .selected = false, .sources = &.{
         .{ .dir = "Library/Developer/Xcode/DerivedData" },
         .{ .dir = "Library/Developer/Xcode/iOS DeviceSupport" },
         .{ .dir = "Library/Developer/Xcode/macOS DeviceSupport" },
@@ -59,15 +67,15 @@ pub const specs = [_]Spec{
         .{ .dir = "Library/Developer/CoreSimulator/Caches" },
         .{ .kind = .worktrees },
     } },
-    .{ .kind = .agents, .title = "Agent Sessions", .desc = "Claude Code's and Codex's sessions over a month old", .note = "You can't resume these conversations after they go.", .doing = "Looking through agent sessions…", .color = 0x5ac8fa, .selected = false, .sources = &.{
+    .{ .kind = .agents, .title = "Agent Sessions", .desc = "Claude Code's and Codex's sessions over a month old", .note = "You can't resume these conversations after they go.", .doing = "Looking through agent sessions…", .selected = false, .sources = &.{
         .{ .dir = ".claude/projects", .kind = .sessions },
         .{ .dir = ".codex/sessions", .kind = .sessions },
         .{ .dir = ".codex/archived_sessions", .kind = .sessions },
     } },
-    .{ .kind = .installers, .title = "Installers", .desc = "Disk images and packages left in Downloads", .note = "Download them again to install the apps again.", .doing = "Looking for installers in Downloads…", .color = 0xa2845e, .selected = false, .sources = &.{.{ .dir = "Downloads", .filter = .installer }} },
-    .{ .kind = .logs, .title = "Logs", .desc = "Apps' logs and crash reports", .note = "Crash reports you have not sent go too.", .doing = "Measuring logs…", .color = 0xff9f0a, .sources = &.{.{ .dir = "Library/Logs" }} },
-    .{ .kind = .temporary, .title = "Temporary Files", .desc = "Left by apps, unchanged for three days", .note = "Only files nothing changed for three days.", .doing = "Measuring temporary files…", .color = 0x30b0c7, .sources = &.{.{ .kind = .temp, .filter = .not_apple }} },
-    .{ .kind = .trash, .title = "Trash", .desc = "Deleted for good", .note = "What is in the Trash is deleted for good.", .doing = "Measuring the Trash…", .color = 0x8e8e93, .forever = true, .selected = false, .sources = &.{.{ .dir = ".Trash" }} },
+    .{ .kind = .installers, .title = "Installers", .desc = "Disk images and packages left in Downloads", .note = "Download them again to install the apps again.", .doing = "Looking for installers in Downloads…", .selected = false, .sources = &.{.{ .dir = "Downloads", .filter = .installer }} },
+    .{ .kind = .logs, .title = "Logs", .desc = "Apps' logs and crash reports", .note = "Crash reports you have not sent go too.", .doing = "Measuring logs…", .sources = &.{.{ .dir = "Library/Logs" }} },
+    .{ .kind = .temporary, .title = "Temporary Files", .desc = "Left by apps, unchanged for three days", .note = "Only files nothing changed for three days.", .doing = "Measuring temporary files…", .sources = &.{.{ .kind = .temp, .filter = .not_apple }} },
+    .{ .kind = .trash, .title = "Trash", .desc = "Deleted for good", .note = "What is in the Trash is deleted for good.", .doing = "Measuring the Trash…", .forever = true, .selected = false, .sources = &.{.{ .dir = ".Trash" }} },
 };
 
 pub const Item = struct {
@@ -127,6 +135,7 @@ pub const Result = struct {
     moved: u64 = 0,
     deleted: u64 = 0,
     failed: u32 = 0,
+    kept: u32 = 0,
 };
 
 pub const Notify = struct { ctx: *anyopaque, func: *const fn (*anyopaque) void };
@@ -135,7 +144,7 @@ pub const TrashFn = *const fn ([]const u8) bool;
 
 const How = enum { trash, forever, worktree };
 
-const Action = struct { path: [:0]u8, repo: ?[:0]u8, how: How, bytes: u64 };
+const Action = struct { path: [:0]u8, repo: ?[:0]u8, how: How, bytes: u64, min_age: ?i64 = null };
 
 pub fn keep(filter: Filter, name: []const u8) bool {
     if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) return false;
@@ -158,11 +167,7 @@ pub const Caches = struct { old: *const walk.Cache, new: *walk.Cache, gpa: std.m
 
 pub fn measureCategory(gpa: std.mem.Allocator, env: Env, g: *Gathered, spec: *const Spec, progress: *Progress, caches: Caches) void {
     for (spec.sources) |src| listSource(gpa, env, g, src) catch {};
-    const age: ?i64 = switch (spec.kind) {
-        .temporary => stale_seconds,
-        .agents => session_age,
-        else => null,
-    };
+    const age: ?i64 = minAge(spec.kind);
     const n = g.items.items.len;
     const cached = if (age == null) n else 0;
     const paths = gpa.alloc([:0]const u8, n) catch return;
@@ -257,34 +262,61 @@ fn listSessions(gpa: std.mem.Allocator, g: *Gathered, dir_z: [:0]const u8, depth
     }
 }
 
-fn perform(gpa: std.mem.Allocator, actions: []const Action, trash_fn: TrashFn) Result {
-    var r: Result = .{};
-    var forever: std.ArrayList([]const u8) = .empty;
-    defer forever.deinit(gpa);
-    forever.appendSlice(gpa, &rm_forever) catch return r;
-    var forever_bytes: u64 = 0;
-    for (actions) |a| switch (a.how) {
-        .trash => if (trash_fn(a.path)) {
-            r.moved += a.bytes;
-        } else {
-            r.failed += 1;
-        },
-        .worktree => if (worktree.remove(gpa, a.repo.?, a.path)) {
-            r.deleted += a.bytes;
-        } else {
-            r.failed += 1;
-        },
-        .forever => {
-            forever.append(gpa, a.path) catch continue;
-            forever_bytes += a.bytes;
-        },
+fn stillWanted(gpa: std.mem.Allocator, a: Action, now: i64) bool {
+    if (a.how == .worktree) return worktree.isRemovable(gpa, a.path);
+    if (access(a.path, F_OK) != 0) return false;
+    const min_age = a.min_age orelse return true;
+    return now - walk.measure(gpa, a.path).newest >= min_age;
+}
+
+fn deleteForever(gpa: std.mem.Allocator, batch: []const Action, r: *Result) void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    const ran = ran: {
+        argv.appendSlice(gpa, &rm_forever) catch break :ran false;
+        for (batch) |a| argv.append(gpa, a.path) catch break :ran false;
+        const done = run.capture(gpa, argv.items) catch break :ran false;
+        done.deinit(gpa);
+        break :ran true;
     };
-    if (forever.items.len > rm_forever.len) {
-        const done = run.capture(gpa, forever.items) catch null;
-        if (done) |d| {
-            d.deinit(gpa);
-            if (d.code == 0) r.deleted += forever_bytes else r.failed += 1;
-        } else r.failed += 1;
+    for (batch) |a| {
+        if (ran and access(a.path, F_OK) != 0) r.deleted += a.bytes else r.failed += 1;
+    }
+}
+
+fn perform(gpa: std.mem.Allocator, actions: []const Action, trash_fn: TrashFn, now: i64) Result {
+    var r: Result = .{};
+    var forever: std.ArrayList(Action) = .empty;
+    defer forever.deinit(gpa);
+    var scratch: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer scratch.deinit();
+    for (actions) |a| {
+        _ = scratch.reset(.retain_capacity);
+        if (!stillWanted(scratch.allocator(), a, now)) {
+            r.kept += 1;
+            continue;
+        }
+        switch (a.how) {
+            .trash => if (trash_fn(a.path)) {
+                r.moved += a.bytes;
+            } else {
+                r.failed += 1;
+            },
+            .worktree => if (worktree.remove(gpa, a.repo.?, a.path)) {
+                r.deleted += a.bytes;
+            } else {
+                r.failed += 1;
+            },
+            .forever => forever.append(gpa, a) catch {
+                r.failed += 1;
+            },
+        }
+    }
+    var rest: []const Action = forever.items;
+    while (rest.len > 0) {
+        const n = @min(rest.len, forever_batch);
+        deleteForever(gpa, rest[0..n], &r);
+        rest = rest[n..];
     }
     return r;
 }
@@ -296,6 +328,7 @@ const Job = struct {
     lists: [specs.len]Gathered = @splat(.{}),
     actions: []Action = &.{},
     result: Result = .{},
+    skipped: u32 = 0,
     thread: ?std.Thread = null,
     progress: Progress = .{},
     done: std.atomic.Value(usize) = .init(0),
@@ -310,7 +343,8 @@ const Job = struct {
 
     fn execute(j: *Job, threaded: bool) void {
         if (j.clean) {
-            j.result = perform(j.cl.gpa, j.actions, j.cl.trash_fn);
+            j.result = perform(j.cl.gpa, j.actions, j.cl.trash_fn, j.env.now);
+            j.result.failed += j.skipped;
             return;
         }
         var scratch: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
@@ -366,6 +400,7 @@ pub const Cleaner = struct {
     cache_mem: std.heap.ArenaAllocator = .init(std.heap.page_allocator),
     applied: usize = 0,
     cancelled: bool = false,
+    again: bool = false,
     last: ?Result = null,
     job: ?*Job = null,
     sync: bool = false,
@@ -420,7 +455,12 @@ pub const Cleaner = struct {
     }
 
     pub fn scan(cl: *Cleaner) void {
-        if (cl.job != null) return;
+        if (cl.job) |j| {
+            if (!j.clean) j.progress.stop.store(true, .monotonic);
+            cl.again = true;
+            return;
+        }
+        cl.again = false;
         for (&cl.cats) |*cat| {
             cat.found = .{};
             cat.measured = false;
@@ -438,6 +478,7 @@ pub const Cleaner = struct {
         if (j.clean) return;
         j.progress.stop.store(true, .monotonic);
         cl.cancelled = true;
+        cl.again = false;
     }
 
     pub fn step(cl: *const Cleaner) ?*const Spec {
@@ -464,20 +505,29 @@ pub const Cleaner = struct {
     pub fn clean(cl: *Cleaner) void {
         if (cl.job != null) return;
         var actions: std.ArrayList(Action) = .empty;
+        var skipped: u32 = 0;
         for (&cl.cats) |*c| {
             if (!c.selected) continue;
             for (c.items()) |it| {
                 const how: How = if (it.repo != null) .worktree else if (c.spec.forever) .forever else .trash;
-                const path = cl.gpa.dupeSentinel(u8, it.path, 0) catch continue;
-                const repo = if (it.repo) |r| cl.gpa.dupeSentinel(u8, r, 0) catch null else null;
-                actions.append(cl.gpa, .{ .path = path, .repo = repo, .how = how, .bytes = it.size.bytes }) catch {
+                const path = cl.gpa.dupeSentinel(u8, it.path, 0) catch {
+                    skipped += 1;
+                    continue;
+                };
+                const repo: ?[:0]u8 = if (it.repo) |from| cl.gpa.dupeSentinel(u8, from, 0) catch {
+                    cl.gpa.free(path);
+                    skipped += 1;
+                    continue;
+                } else null;
+                actions.append(cl.gpa, .{ .path = path, .repo = repo, .how = how, .bytes = it.size.bytes, .min_age = minAge(c.spec.kind) }) catch {
                     cl.gpa.free(path);
                     if (repo) |r| cl.gpa.free(r);
+                    skipped += 1;
                 };
             }
         }
         const owned = actions.toOwnedSlice(cl.gpa) catch return actions.deinit(cl.gpa);
-        cl.start(.{ .cl = cl, .env = cl.env(), .clean = true, .actions = owned }, .cleaning);
+        cl.start(.{ .cl = cl, .env = cl.env(), .clean = true, .actions = owned, .skipped = skipped }, .cleaning);
     }
 
     fn env(cl: *const Cleaner) Env {
@@ -523,6 +573,7 @@ pub const Cleaner = struct {
             std.mem.swap(std.heap.ArenaAllocator, &cl.cache_mem, &j.cache_mem);
         }
         j.destroy(cl.gpa);
+        if (cl.again) return cl.scan();
         cl.tell();
     }
 

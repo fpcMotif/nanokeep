@@ -52,14 +52,33 @@ pub fn capture(gpa: std.mem.Allocator, argv: []const []const u8) !Output {
     }
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
+    const drained = drain(gpa, fds[0], &out);
+    _ = close(fds[0]);
+    const status = reap(pid) orelse return error.Wait;
+    try drained;
+    if (!std.c.W.IFEXITED(status)) return error.Signaled;
+    return .{ .out = try out.toOwnedSlice(gpa), .code = std.c.W.EXITSTATUS(status) };
+}
+
+fn drain(gpa: std.mem.Allocator, fd: c_int, out: *std.ArrayList(u8)) !void {
     var buf: [read_chunk]u8 = undefined;
     while (true) {
-        const n = read(fds[0], &buf, buf.len);
-        if (n <= 0) break;
+        const n = read(fd, &buf, buf.len);
+        if (n == 0) return;
+        if (n < 0) {
+            if (std.c.errno(n) == .INTR) continue;
+            return error.Read;
+        }
         try out.appendSlice(gpa, buf[0..@intCast(n)]);
     }
-    _ = close(fds[0]);
+}
+
+fn reap(pid: c_int) ?u32 {
     var status: c_int = 0;
-    _ = waitpid(pid, &status, 0);
-    return .{ .out = try out.toOwnedSlice(gpa), .code = std.c.W.EXITSTATUS(@bitCast(status)) };
+    while (true) {
+        const rc = waitpid(pid, &status, 0);
+        if (rc == pid) return @bitCast(status);
+        if (rc < 0 and std.c.errno(rc) == .INTR) continue;
+        return null;
+    }
 }

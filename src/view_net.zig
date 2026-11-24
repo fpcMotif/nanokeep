@@ -33,8 +33,8 @@ fn up(s: metrics.Sample) f32 {
     return s.net_out;
 }
 
-pub const download_color = 0x30b0c7;
-pub const upload_color = 0xaf52de;
+pub const download_color: @import("theme.zig").Hue = .sand;
+pub const upload_color: @import("theme.zig").Hue = .lime;
 
 pub const series = [_]card.Series{ .{ .color = download_color, .value = down }, .{ .color = upload_color, .value = up } };
 

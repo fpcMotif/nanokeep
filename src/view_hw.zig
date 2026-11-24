@@ -4,6 +4,7 @@ const ui = nanoui.ui;
 const metrics = @import("metrics.zig");
 const procs = @import("procs.zig");
 const card = @import("view_card.zig");
+const theme = @import("theme.zig");
 const view = @import("view.zig");
 const App = @import("app.zig").App;
 
@@ -65,12 +66,12 @@ pub fn powerMax(a: *App) f32 {
     return @max(5, a.metrics.history.peak(since, "power") * 1.1);
 }
 
-pub fn pressureColor(p: metrics.Pressure) ui.Color {
-    return switch (p) {
-        .normal => .hex(card.memory_tint),
-        .elevated => .hex(0xff9500),
-        .critical => .hex(0xff3b30),
-    };
+pub fn pressureColor(c: *ui.Context, p: metrics.Pressure) ui.Color {
+    return theme.hue(c, switch (p) {
+        .normal => .lime,
+        .elevated => .yellow,
+        .critical => .red,
+    });
 }
 
 pub fn temp(c: *ui.Context, t: f32) []const u8 {
@@ -120,8 +121,8 @@ pub fn cpuPage(c: *ui.Context, a: *App) void {
                 ui.text(c, c.print("{d} logical processors", .{m.cpu.count}), .{ .size = 11.5, .color = c.theme.muted });
             }
             const eff = @min(m.cpu.efficiency, m.cpu.count);
-            cores(c, "Performance Cores", m.cpu.cores[eff..m.cpu.count], eff, .hex(card.cpu_tint));
-            if (eff > 0) cores(c, "Efficiency Cores", m.cpu.cores[0..eff], 0, .hex(0xd4920a));
+            cores(c, "Performance Cores", m.cpu.cores[eff..m.cpu.count], eff, theme.hue(c, .violet));
+            if (eff > 0) cores(c, "Efficiency Cores", m.cpu.cores[0..eff], 0, theme.hue(c, .sand));
         }
         {
             const box = card.half(c);
@@ -174,15 +175,20 @@ fn cores(c: *ui.Context, title: []const u8, loads: []const f32, first: usize, co
     }
 }
 
-pub fn memorySlices(m: *const metrics.Memory, th: anytype) [5]card.Slice {
+pub fn memorySlices(c: *ui.Context, m: *const metrics.Memory) [5]card.Slice {
     return .{
-        .{ .color = .hex(card.app_color), .value = @floatFromInt(m.app) },
-        .{ .color = .hex(card.wired_color), .value = @floatFromInt(m.wired) },
-        .{ .color = .hex(card.compressed_color), .value = @floatFromInt(m.compressed) },
-        .{ .color = .hex(card.cached_color), .value = @floatFromInt(m.cached) },
-        .{ .color = th.border, .value = @floatFromInt(m.free()) },
+        .{ .color = theme.hue(c, card.app_color), .value = @floatFromInt(m.app) },
+        .{ .color = theme.hue(c, card.wired_color), .value = @floatFromInt(m.wired) },
+        .{ .color = theme.hue(c, card.compressed_color), .value = @floatFromInt(m.compressed) },
+        .{ .color = theme.hue(c, card.cached_color), .value = @floatFromInt(m.cached) },
+        .{ .color = theme.of(c).fill_2, .value = @floatFromInt(m.free()) },
     };
 }
+
+const type_list_w = 140;
+const donut_gap = 16;
+const min_donut = 72;
+const max_donut = 104;
 
 pub fn memoryByType(c: *ui.Context, a: *App) void {
     const m = &a.metrics.memory;
@@ -192,11 +198,14 @@ pub fn memoryByType(c: *ui.Context, a: *App) void {
         const h = card.head(c, "memorychip", card.memory_tint, "Memory by Type");
         h.end();
     }
-    const r = ui.div(c).row().wFull().gap(18).itemsCenter();
+    const r = ui.div(c).row().wFull().gap(donut_gap).itemsCenter();
     defer r.end();
-    const slices = memorySlices(m, c.theme);
+    const slices = memorySlices(c, m);
     const used: f32 = @as(f32, @floatFromInt(m.used())) / @as(f32, @floatFromInt(@max(1, m.total)));
-    card.donut(c, 104, &slices, c.print("{d:.0}%", .{used * 100}), "in use");
+    const rect = r.interaction().rect;
+    if (rect == null) c.frameIn(0);
+    const room = (if (rect) |x| x.w else 0) - type_list_w - donut_gap;
+    if (room >= min_donut) card.donut(c, @min(max_donut, room), &slices, c.print("{d:.0}%", .{used * 100}), "in use");
     const list = ui.div(c).column().grow().w(0).gap(1);
     defer list.end();
     const names = [_][]const u8{ "App", "Wired", "Compressed", "Cached", "Free" };
@@ -208,7 +217,7 @@ pub fn memoryByType(c: *ui.Context, a: *App) void {
         defer row.end();
         card.dot(c, 7, s.color);
         {
-            const l = ui.div(c).row().grow().w(0);
+            const l = ui.div(c).row().grow().w(0).clip();
             defer l.end();
             ui.text(c, n, .{ .size = 12 });
         }
@@ -231,7 +240,7 @@ pub fn memoryPage(c: *ui.Context, a: *App) void {
             card.legend(c, card.app_color, "App");
             card.legend(c, card.compressed_color, "Compressed");
             card.legend(c, card.wired_color, "Wired");
-            if (m.level != .normal) card.tag(c, m.level.title(), pressureColor(m.level));
+            if (m.level != .normal) card.tag(c, m.level.title(), pressureColor(c, m.level));
         }
         {
             const r = ui.div(c).row().wFull().gap(16).itemsStart();
@@ -248,7 +257,7 @@ pub fn memoryPage(c: *ui.Context, a: *App) void {
             card.stat(c, "Compressed", view.size(c, m.compressed), "");
             card.stat(c, "Cached", c.print("{s}", .{procs.bytes(&b[0], m.cached)}), "");
         }
-        const slices = memorySlices(m, c.theme);
+        const slices = memorySlices(c, m);
         card.stacked(c, &slices, 7);
         card.chart(c, a, "mem-chart", card.memory_tint, &memory_series, .{ .rows = 16, .max = 1 });
     }
@@ -260,14 +269,14 @@ pub fn memoryPage(c: *ui.Context, a: *App) void {
             const box = card.half(c);
             defer box.end();
             {
-                const h = card.head(c, "gauge.with.dots.needle.33percent", 0xff9500, "Pressure");
+                const h = card.head(c, "gauge.with.dots.needle.33percent", .yellow, "Pressure");
                 defer h.end();
-                if (m.level != .normal) card.tag(c, m.level.title(), pressureColor(m.level));
+                if (m.level != .normal) card.tag(c, m.level.title(), pressureColor(c, m.level));
             }
             {
                 const ring = ui.div(c).row().wFull().justifyCenter();
                 defer ring.end();
-                const color = pressureColor(m.level);
+                const color = pressureColor(c, m.level);
                 card.donut(c, 104, &.{ .{ .color = color, .value = m.pressure }, .{ .color = color.alpha(0.2), .value = 100 - m.pressure } }, c.print("{d:.0}%", .{m.pressure}), "pressure");
             }
             card.kv(c, "Page-ins", c.print("{d:.0} /s", .{m.pageins}));
@@ -283,7 +292,7 @@ pub fn memoryPage(c: *ui.Context, a: *App) void {
             const used = view.size(c, m.swap_used);
             const sp = std.mem.indexOfScalar(u8, used, ' ') orelse used.len;
             card.big(c, "Written to disk", used[0..sp], if (sp < used.len) used[sp + 1 ..] else "");
-            card.bar(c, if (m.swap_total > 0) @as(f32, @floatFromInt(m.swap_used)) / @as(f32, @floatFromInt(m.swap_total)) else 0, .hex(card.compressed_color), 6);
+            card.bar(c, if (m.swap_total > 0) @as(f32, @floatFromInt(m.swap_used)) / @as(f32, @floatFromInt(m.swap_total)) else 0, theme.hue(c, card.compressed_color), 6);
             card.kv(c, "Swap size", view.size(c, m.swap_total));
             card.kv(c, "Compressed", view.size(c, m.compressed));
         }
@@ -370,7 +379,7 @@ fn engine(c: *ui.Context, title: []const u8, v: f32) void {
         defer l.end();
         ui.text(c, title, .{ .size = 12.5, .color = c.theme.muted });
     }
-    card.bar(c, v / 100, .hex(card.gpu_tint), 5);
+    card.bar(c, v / 100, theme.hue(c, card.gpu_tint), 5);
     {
         const t = ui.div(c).row().w(44).justifyEnd();
         defer t.end();
@@ -422,7 +431,7 @@ pub fn diskPage(c: *ui.Context, a: *App) void {
         const sp = std.mem.indexOfScalar(u8, free, ' ') orelse free.len;
         card.big(c, c.print("Free of {s}", .{procs.bytes(&b[1], sy.disk_total)}), free[0..sp], if (sp < free.len) free[sp + 1 ..] else "");
         const used = sy.disk_total -| sy.disk_free;
-        card.bar(c, @as(f32, @floatFromInt(used)) / @as(f32, @floatFromInt(@max(1, sy.disk_total))), .hex(card.disk_tint), 6);
+        card.bar(c, @as(f32, @floatFromInt(used)) / @as(f32, @floatFromInt(@max(1, sy.disk_total))), theme.hue(c, card.disk_tint), 6);
         const r = ui.div(c).row().wFull().gap(16);
         defer r.end();
         card.stat(c, "Used", view.size(c, used), "");
@@ -459,8 +468,8 @@ pub fn energyPage(c: *ui.Context, a: *App) void {
                 h.end();
             }
             if (!m.temps.found) ui.text(c, "This Mac doesn't share its sensors.", .{ .size = 12, .color = c.theme.muted });
-            if (m.temps.cpu > 0) thermo(c, "Processor", if (m.temps.cpu_max > 0) c.print("hottest {d:.0} °C", .{m.temps.cpu_max}) else "", m.temps.cpu, .hex(0xff9500));
-            if (m.temps.storage > 0) thermo(c, "Storage", "", m.temps.storage, .hex(card.memory_tint));
+            if (m.temps.cpu > 0) thermo(c, "Processor", if (m.temps.cpu_max > 0) c.print("hottest {d:.0} °C", .{m.temps.cpu_max}) else "", m.temps.cpu, theme.hue(c, .yellow));
+            if (m.temps.storage > 0) thermo(c, "Storage", "", m.temps.storage, theme.hue(c, .sand));
         }
     }
     {
@@ -535,7 +544,7 @@ fn awake(c: *ui.Context, a: *App) void {
         const r = ui.div(c).row().wFull().gap(8).itemsCenter();
         defer r.end();
         {
-            const g = ui.div(c).row().w(18).h(18).center().rounded(5).bg(c.theme.muted.alpha(0.18));
+            const g = ui.div(c).row().w(18).h(18).center().rounded(theme.radius.chip).bg(theme.of(c).fill_2);
             defer g.end();
             ui.icon(c, "app.fill", .{ .size = 10, .color = c.theme.muted });
         }
@@ -545,7 +554,7 @@ fn awake(c: *ui.Context, a: *App) void {
             ui.text(c, p.name, .{ .size = 12.5 });
             if (as.label().len > 0) ui.text(c, as.label(), .{ .size = 10.5, .color = c.theme.muted });
         }
-        card.tag(c, if (as.display) "Display" else "System", .hex(card.energy_tint));
+        card.tag(c, if (as.display) "Display" else "System", theme.hue(c, card.energy_tint));
     }
     if (shown == 0) ui.text(c, "No app is keeping this Mac awake.", .{ .size = 12, .color = c.theme.muted });
     if (services > 0) ui.text(c, c.print("And {d} system services for a moment.", .{services}), .{ .size = 11.5, .color = c.theme.muted });

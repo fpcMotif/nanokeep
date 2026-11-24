@@ -8,9 +8,9 @@ const card = @import("view_card.zig");
 const hw = @import("view_hw.zig");
 const App = app_mod.App;
 
-extern "c" fn time(t: ?*i64) i64;
+const theme = @import("theme.zig");
 
-pub const accent = 0xf5458f;
+extern "c" fn time(t: ?*i64) i64;
 
 pub fn size(c: *ui.Context, n: u64) []const u8 {
     var b: [32]u8 = undefined;
@@ -37,33 +37,34 @@ pub fn ago(c: *ui.Context, now: i64, then: i64) []const u8 {
     return c.print("{s}", .{procs.ago(&b, now, then)});
 }
 
-pub const apple_gold = 0xd4a85a;
+const narrow_window_w = 1000;
 
-fn brighten(c: *ui.Context) void {
-    const fonts = .{ c.theme.font, c.theme.mono_font };
-    c.theme = .light;
-    c.theme.font = fonts[0];
-    c.theme.mono_font = fonts[1];
-    c.theme.background = .hex(0xf6f6f9);
-    c.theme.border = .hex(0xe5e5ea);
-    c.theme.surface_hover = .hex(0xefeff4);
-    c.theme.accent = .hex(accent);
-    c.theme.accent_hover = .hex(0xe23a80);
-    c.theme.accent_text = .white;
+pub fn narrow(c: *ui.Context) bool {
+    return c.size.w < narrow_window_w;
 }
 
-fn aurora(c: *ui.Context) void {
-    const blobs = [_]struct { x: f32, y: f32, d: f32, color: u24, a: f32 }{
-        .{ .x = -90, .y = -60, .d = 300, .color = accent, .a = 0.30 },
-        .{ .x = 70, .y = 220, .d = 260, .color = 0x5ac8fa, .a = 0.28 },
-        .{ .x = -60, .y = 470, .d = 320, .color = apple_gold, .a = 0.34 },
-        .{ .x = 120, .y = 700, .d = 240, .color = 0xaf52de, .a = 0.20 },
-    };
-    for (blobs) |b| _ = c.leaf(.{ .absolute = true, .offset = .{ .x = b.x, .y = b.y }, .width = .{ .px = b.d }, .height = .{ .px = b.d }, .radius = b.d / 2, .background = ui.Color.hex(b.color).alpha(b.a) }, .none, null);
-}
+const TileRows = struct {
+    per_row: usize,
+    count: usize = 0,
+    row: ?ui.Div = null,
+
+    fn next(g: *TileRows, c: *ui.Context) void {
+        if (g.count % g.per_row == 0) {
+            g.end();
+            ui.key(c, c.print("tile-row-{d}", .{g.count}));
+            g.row = card.pair(c);
+        }
+        g.count += 1;
+    }
+
+    fn end(g: *TileRows) void {
+        if (g.row) |r| r.end();
+        g.row = null;
+    }
+};
 
 pub fn view(a: *App, c: *ui.Context) void {
-    brighten(c);
+    theme.apply(c);
     c.frameIn(a.tick(if (a.clock) |f| f() else c.time));
     keys(c, a);
     const th = c.theme;
@@ -98,34 +99,37 @@ fn keys(c: *ui.Context, a: *App) void {
     for (pages[0..@min(pages.len, 9)], 0..) |p, i| if (c.shortcut(.{ .key = @as(u21, '1') + @as(u21, @intCast(i)), .cmd = true })) {
         a.page = p;
     };
-    if (c.shortcut(.{ .key = 'r', .cmd = true })) a.cleaner.scan();
+    const chosen = a.selected != null or a.app_selected != null;
+    const asking = a.confirm_quit or a.confirm_uninstall or a.confirm_clean;
+    if (!asking and c.shortcut(.{ .key = 'r', .cmd = true })) a.cleaner.scan();
+    if (chosen and !asking and c.focus == 0 and c.shortcut(.{ .key = ui.Shortcut.escape })) {
+        a.selected = null;
+        a.app_selected = null;
+    }
 }
 
 fn sidebar(c: *ui.Context, a: *App) void {
     const th = c.theme;
     const m = &a.metrics;
     var b: [32]u8 = undefined;
-    const frame = ui.div(c).column().w(232).hFull().p(10);
+    const frame = ui.div(c).column().w(228).hFull().pl(theme.space.md).py(theme.space.md);
     defer frame.end();
-    const backdrop = ui.div(c).column().wFull().grow().rounded(20).clip();
-    defer backdrop.end();
-    aurora(c);
-    const side = ui.div(c).column().wFull().grow().px(8).pt(12).pb(12).gap(1).rounded(20).glass(.{});
+    const side = ui.div(c).column().wFull().grow().p(side_pad).gap(1).rounded(theme.radius.panel).border(theme.of(c).sep).borderW(0.5).glass(.{ .tint = theme.of(c).glass_tint });
     defer side.end();
-    navItem(c, a, .overview, "square.grid.2x2", 0x636366, "Overview", "");
-    navItem(c, a, .processes, "list.bullet", 0x8e8e93, "Processes", c.print("{d}", .{a.sampler.procs.items.len}));
+    navItem(c, a, .overview, "square.grid.2x2", "Overview", "");
+    navItem(c, a, .processes, "list.bullet", "Processes", c.print("{d}", .{a.sampler.procs.items.len}));
     sectionLabel(c, "Hardware");
-    navItem(c, a, .cpu, "cpu", card.cpu_tint, "CPU", c.print("{d:.0}%", .{m.cpu.busy()}));
+    navItem(c, a, .cpu, "cpu", "CPU", c.print("{d:.0}%", .{m.cpu.busy()}));
     const mem = @as(f32, @floatFromInt(m.memory.used())) / @as(f32, @floatFromInt(@max(1, m.memory.total)));
-    navItem(c, a, .memory, "memorychip", card.memory_tint, "Memory", c.print("{d:.0}%", .{mem * 100}));
-    navItem(c, a, .gpu, "cube", card.gpu_tint, "GPU", c.print("{d:.0}%", .{m.gpu.device}));
-    navItem(c, a, .disk, "internaldrive", card.disk_tint, "Disk", c.print("{s}", .{metrics.rate(&b, m.disk.read + m.disk.write)}));
-    navItem(c, a, .network, "network", card.network_tint, "Network", c.print("{s}", .{metrics.rate(&b, m.net.in + m.net.out)}));
-    navItem(c, a, .energy, "bolt.fill", card.energy_tint, "Energy", "");
+    navItem(c, a, .memory, "memorychip", "Memory", c.print("{d:.0}%", .{mem * 100}));
+    navItem(c, a, .gpu, "cube", "GPU", c.print("{d:.0}%", .{m.gpu.device}));
+    navItem(c, a, .disk, "internaldrive", "Disk", c.print("{s}", .{metrics.rate(&b, m.disk.read + m.disk.write)}));
+    navItem(c, a, .network, "network", "Network", c.print("{s}", .{metrics.rate(&b, m.net.in + m.net.out)}));
+    navItem(c, a, .energy, "bolt.fill", "Energy", "");
     sectionLabel(c, "System");
-    navItem(c, a, .apps, "square.grid.3x3.fill", 0x8e8e93, "Apps", if (a.inventory.loaded) c.print("{d}", .{a.inventory.apps.items.len}) else "");
-    navItem(c, a, .cleanup, "sparkles", 0xff9f0a, "Cleanup", if (a.cleaner.scanned) size(c, a.cleaner.total()) else "");
-    navItem(c, a, .about, "laptopcomputer", 0x8e8e93, "About This Mac", "");
+    navItem(c, a, .apps, "square.grid.3x3.fill", "Apps", if (a.inventory.loaded) c.print("{d}", .{a.inventory.apps.items.len}) else "");
+    navItem(c, a, .cleanup, "sparkles", "Cleanup", if (a.cleaner.scanned) size(c, a.cleaner.total()) else "");
+    navItem(c, a, .about, "laptopcomputer", "About This Mac", "");
     ui.spacer(c);
     const foot = ui.div(c).column().wFull().px(8).gap(2);
     defer foot.end();
@@ -133,35 +137,38 @@ fn sidebar(c: *ui.Context, a: *App) void {
     ui.text(c, c.print("{s} · Up {s}", .{ a.machine.chip.get(), uptime(c, time(null) - a.machine.boot) }), .{ .size = 11, .color = th.muted });
 }
 
+const side_pad = theme.space.md;
+const nav_radius = theme.inner(theme.radius.panel, side_pad - 2);
+
 fn sectionLabel(c: *ui.Context, s: []const u8) void {
     const d = ui.div(c).row().wFull().px(10).pt(14).pb(4);
     defer d.end();
-    ui.text(c, s, .{ .size = 11, .weight = .semibold, .color = c.theme.muted });
+    ui.text(c, s, .{ .size = 11, .weight = .semibold, .color = theme.of(c).label_3 });
 }
 
-fn navItem(c: *ui.Context, a: *App, page: app_mod.Page, icon: []const u8, tint: u24, title: []const u8, figure: []const u8) void {
-    const th = c.theme;
+fn navItem(c: *ui.Context, a: *App, page: app_mod.Page, icon: []const u8, title: []const u8, figure: []const u8) void {
+    const p = theme.of(c);
     const on = a.page == page;
     ui.key(c, title);
-    var d = ui.div(c).row().wFull().h(30).px(8).gap(9).itemsCenter().rounded(10).control();
-    d = if (on) d.bg(th.accent.alpha(0.14)) else d.hover(th.text.alpha(0.05));
+    var d = ui.div(c).row().wFull().h(28).pl(10).pr(8).gap(theme.space.md).itemsCenter().rounded(nav_radius).control();
+    d = if (on) d.bg(p.accent_soft) else d.hover(p.fill);
     defer d.end();
     if (d.clicked()) {
         a.page = page;
         c.changed = true;
     }
     {
-        const badge = ui.div(c).row().w(22).h(22).center().rounded(6).bg(ui.Color.hex(tint));
-        defer badge.end();
-        ui.icon(c, icon, .{ .size = 11, .color = .white });
+        const slot = ui.div(c).row().w(18).h(18).center();
+        defer slot.end();
+        ui.icon(c, icon, .{ .size = 13, .color = if (on) p.accent else p.label_2 });
     }
-    ui.text(c, title, .{ .size = 13, .weight = if (on) .semibold else .regular, .color = if (on) th.accent else th.text });
+    ui.text(c, title, .{ .size = 13, .weight = .medium, .color = p.label });
     ui.spacer(c);
-    if (figure.len > 0) ui.text(c, figure, .{ .size = 11, .mono = true, .color = if (on) th.accent else th.muted });
+    if (figure.len > 0) ui.text(c, figure, .{ .size = 11, .mono = true, .color = if (on) p.accent else p.label_2 });
 }
 
 pub fn header(c: *ui.Context, title: []const u8, sub: []const u8) ui.Div {
-    const h = ui.div(c).row().wFull().h(60).px(20).gap(10).itemsCenter();
+    const h = ui.div(c).row().wFull().h(60).px(theme.space.page).gap(theme.space.lg).itemsCenter();
     {
         const t = ui.div(c).column().gap(2).grow().w(0).clip();
         defer t.end();
@@ -176,7 +183,7 @@ const Stat = struct { label: []const u8, value: []const u8 };
 const Tile = struct {
     page: app_mod.Page,
     icon: []const u8,
-    tint: u24,
+    tint: theme.Hue,
     title: []const u8,
     label: []const u8,
     value: []const u8,
@@ -191,7 +198,7 @@ const Tile = struct {
 fn tile(c: *ui.Context, a: *App, t: Tile) void {
     const th = c.theme;
     ui.key(c, t.title);
-    const box = ui.div(c).column().grow().w(0).p(16).gap(10).rounded(card.radius).bg(th.surface).shadow(card.lift).control();
+    const box = theme.surface(c, ui.div(c).column().grow().w(0).p(card.pad).gap(theme.space.lg), card.radius).control().hover(th.surface.mix(theme.hue(c, t.tint), 0.045));
     defer box.end();
     if (box.clicked()) a.page = t.page;
     {
@@ -221,9 +228,9 @@ fn overview(c: *ui.Context, a: *App) void {
     card.pageHeader(c, a, "Overview", a.machine.name.get(), true);
     const body = ui.div(c).column().wFull().grow().scrollY().px(20).pb(20).gap(14);
     defer body.end();
+    var tiles: TileRows = .{ .per_row = if (narrow(c)) 2 else 3 };
     {
-        const r = card.pair(c);
-        defer r.end();
+        tiles.next(c);
         tile(c, a, .{
             .page = .cpu,
             .icon = "cpu",
@@ -236,6 +243,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .series = &hw.cpu_series,
         });
         const used = split(size(c, m.memory.used()));
+        tiles.next(c);
         tile(c, a, .{
             .page = .memory,
             .icon = "memorychip",
@@ -248,9 +256,10 @@ fn overview(c: *ui.Context, a: *App) void {
             .series = &hw.memory_series,
             .max = 1,
             .tag = if (m.memory.level != .normal) m.memory.level.title() else null,
-            .tag_color = hw.pressureColor(m.memory.level),
+            .tag_color = hw.pressureColor(c, m.memory.level),
         });
         const start = since(a);
+        tiles.next(c);
         tile(c, a, .{
             .page = .gpu,
             .icon = "cube",
@@ -264,9 +273,8 @@ fn overview(c: *ui.Context, a: *App) void {
         });
     }
     {
-        const r = card.pair(c);
-        defer r.end();
         const free = split(size(c, sy.disk_free));
+        tiles.next(c);
         tile(c, a, .{
             .page = .disk,
             .icon = "internaldrive",
@@ -280,6 +288,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .max = hw.diskMax(a),
         });
         const down = split(rate(c, m.net.in));
+        tiles.next(c);
         tile(c, a, .{
             .page = .network,
             .icon = "network",
@@ -293,6 +302,7 @@ fn overview(c: *ui.Context, a: *App) void {
             .max = @import("view_net.zig").netMax(a),
         });
         const drawing = split(watts(c, sy.power));
+        tiles.next(c);
         tile(c, a, .{
             .page = .energy,
             .icon = "bolt.fill",
@@ -306,8 +316,9 @@ fn overview(c: *ui.Context, a: *App) void {
             .max = hw.powerMax(a),
         });
     }
+    tiles.end();
     {
-        const r = card.pair(c);
+        var r = card.pair(c);
         defer r.end();
         hw.memoryByType(c, a);
         {
@@ -321,6 +332,11 @@ fn overview(c: *ui.Context, a: *App) void {
                 ui.text(c, c.print("{s} in all", .{procs.bytes(&b[0], total)}), .{ .size = 11.5, .color = c.theme.muted });
             }
             card.treemap(c, a, 104);
+        }
+        if (narrow(c)) {
+            r.end();
+            ui.key(c, "energy-row");
+            r = card.pair(c);
         }
         {
             const box = card.half(c);
@@ -343,12 +359,12 @@ fn since(a: *App) f64 {
 fn cleanupCard(c: *ui.Context, a: *App) void {
     const th = c.theme;
     var b: [32]u8 = undefined;
-    const box = ui.div(c).row().wFull().p(16).gap(12).itemsCenter().rounded(card.radius).bg(th.surface).shadow(card.lift);
+    const box = theme.surface(c, ui.div(c).row().wFull().p(card.pad).gap(theme.space.xl).itemsCenter(), card.radius);
     defer box.end();
     {
-        const badge = ui.div(c).row().w(36).h(36).center().rounded(10).bg(ui.Color.hex(0xff9f0a).alpha(0.16));
+        const badge = ui.div(c).row().w(36).h(36).center().rounded(theme.radius.control).bg(theme.of(c).accent_soft);
         defer badge.end();
-        ui.icon(c, "sparkles", .{ .size = 17, .color = .hex(0xff9f0a) });
+        ui.icon(c, "sparkles", .{ .size = 17, .color = th.accent });
     }
     {
         const t = ui.div(c).column().gap(2).grow().w(0).clip();

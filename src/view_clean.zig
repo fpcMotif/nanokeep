@@ -19,7 +19,19 @@ const w_size = 96;
 const w_files = 90;
 const w_modified = 120;
 
-const orange = 0xff9f0a;
+const theme = @import("theme.zig");
+const hero_pad = 22;
+
+const hues = [_]theme.Hue{ .violet, .sand, .lime, .yellow };
+
+fn ink(c: *ui.Context, kind: cleaner.Kind) ui.Color {
+    return theme.hue(c, hues[@intFromEnum(kind) % hues.len]);
+}
+
+fn tone(c: *ui.Context, kind: cleaner.Kind) ui.Color {
+    const full = ink(c, kind);
+    return if (@intFromEnum(kind) < hues.len) full else theme.of(c).win.mix(full, 0.5);
+}
 
 pub fn iconOf(kind: cleaner.Kind) []const u8 {
     return switch (kind) {
@@ -73,18 +85,18 @@ fn hero(c: *ui.Context, a: *App) void {
     const th = c.theme;
     const cl = &a.cleaner;
     const state = heroOf(cl);
-    const box = ui.div(c).column().wFull().p(22).gap(18).rounded(card.radius).bg(th.surface).shadow(card.lift);
+    const box = theme.surface(c, ui.div(c).column().wFull().p(hero_pad).gap(18), theme.radius.hero);
     defer box.end();
     {
         const r = ui.div(c).row().wFull().gap(16).itemsCenter();
         defer r.end();
         {
-            const badge = ui.div(c).row().w(52).h(52).center().rounded(13).bg(ui.Color.hex(orange).alpha(0.18));
+            const badge = ui.div(c).row().w(52).h(52).center().rounded(theme.radius.panel).bg(theme.of(c).accent_soft);
             defer badge.end();
             const spin: f32 = if (state == .scanning) @floatCast(1 + 0.08 * @sin(c.time * 5)) else 1;
             const s = ui.div(c).row().center().scale(spin);
             defer s.end();
-            ui.icon(c, "sparkles", .{ .size = 24, .color = .hex(orange) });
+            ui.icon(c, "sparkles", .{ .size = 24, .color = th.accent });
         }
         {
             ui.key(c, @tagName(state));
@@ -119,7 +131,7 @@ fn hero(c: *ui.Context, a: *App) void {
                 .idle => "Scan to see what can be cleaned.",
                 .scanning => "Looking through caches, logs and temporary files…",
                 .cleaning => "Moving what you chose to the Trash…",
-                .found => c.print("{s} chosen · {d} items", .{ view.size(c, cl.selectedBytes()), cl.selectedItems() }),
+                .found => c.print("{s} chosen · {d} {s}", .{ view.size(c, cl.selectedBytes()), cl.selectedItems(), if (cl.selectedItems() == 1) "item" else "items" }),
             };
             ui.text(c, sub, .{ .size = 12.5, .color = th.muted });
         }
@@ -168,7 +180,7 @@ fn diskMap(c: *ui.Context, a: *App) void {
     for (&cl.cats, 0..) |*cat, i| {
         const b = cat.bytes();
         const alpha: f32 = if (cat.selected or !cl.scanned) 1 else 0.38;
-        slices[i] = .{ .color = ui.Color.hex(cat.spec.color).alpha(alpha), .bytes = b };
+        slices[i] = .{ .color = tone(c, cat.spec.kind).alpha(alpha), .bytes = b };
         found += b;
     }
     if (scanning) if (cl.step()) |spec| {
@@ -178,8 +190,8 @@ fn diskMap(c: *ui.Context, a: *App) void {
         found += live;
     };
     const used = sy.disk_total -| sy.disk_free;
-    slices[n] = .{ .color = th.muted.alpha(0.5), .bytes = used -| found };
-    slices[n + 1] = .{ .color = th.muted.alpha(0.18), .bytes = sy.disk_free };
+    slices[n] = .{ .color = theme.of(c).label_3, .bytes = used -| found };
+    slices[n + 1] = .{ .color = theme.of(c).fill_2, .bytes = sy.disk_free };
     for (slices, 0..) |s, i| bytes[i] = s.bytes;
 
     ui.key(c, "disk-map");
@@ -194,7 +206,7 @@ fn diskMap(c: *ui.Context, a: *App) void {
 
     const beat = @floor(c.time * 7);
     const phase: f32 = @floatCast(c.time * 7 - beat);
-    const step_color: ui.Color = if (cl.step()) |spec| .hex(spec.color) else th.accent;
+    const step_color: ui.Color = if (cl.step()) |spec| tone(c, spec.kind) else th.accent;
     const sparkle_span = found_dots + dots[n];
     var slice: usize = 0;
     var left: usize = dots[0];
@@ -225,9 +237,12 @@ fn diskMap(c: *ui.Context, a: *App) void {
     if (scanning) c.frameIn(1.0 / 14.0);
     const legend = ui.div(c).row().wFull().gap(16).clip();
     defer legend.end();
-    for (&cl.cats) |*cat| legendItem(c, .hex(cat.spec.color), cat.spec.title, if (cat.measured or cat.bytes() > 0) cat.bytes() else null);
-    legendItem(c, th.muted.alpha(0.5), "Other files", null);
-    legendItem(c, th.muted.alpha(0.25), c.print("Free {s}", .{view.size(c, sy.disk_free)}), null);
+    for (&cl.cats) |*cat| {
+        if (cl.scanned and cat.bytes() == 0) continue;
+        legendItem(c, tone(c, cat.spec.kind), cat.spec.title, if (cat.measured or cat.bytes() > 0) cat.bytes() else null);
+    }
+    legendItem(c, theme.of(c).label_3, "Other files", null);
+    legendItem(c, theme.of(c).fill_2, c.print("Free {s}", .{view.size(c, sy.disk_free)}), null);
 }
 
 fn legendItem(c: *ui.Context, color: ui.Color, title: []const u8, n: ?u64) void {
@@ -286,26 +301,31 @@ fn category(c: *ui.Context, a: *App, cat: *cleaner.Category, i: usize, row: usiz
     const pending = cl.phase == .scanning and !cat.measured;
     const measuring = if (cl.step()) |s| s.kind == spec.kind else false;
     ui.key(c, spec.title);
-    const box = ui.div(c).column().wFull().rounded(8).bg(if (row % 2 == 1) th.surface.alpha(0.7) else th.background.alpha(0));
+    const box = ui.div(c).column().wFull().rounded(table.row_radius).bg(table.rowFill(c, false, row));
     defer box.end();
     const size = cat.bytes();
     {
-        const r = ui.div(c).row().wFull().h(31).px(8).gap(8).itemsCenter();
-        defer r.end();
         const ready = !pending and size > 0;
-        if (table.chevron(c, a.expanded[i], ready and cat.items().len > 0)) {
-            a.expanded[i] = !a.expanded[i];
-            c.changed = true;
-        }
+        const opens = ready and cat.items().len > 0;
+        var r = ui.div(c).row().wFull().h(31).px(8).gap(8).itemsCenter().rounded(table.row_radius);
+        if (opens) r = r.control().hover(theme.of(c).fill);
+        defer r.end();
+        var toggled = opens and r.interaction().clicked;
+        if (table.chevron(c, a.expanded[i], opens)) toggled = true;
         if (ready) {
             if (table.check(c, cat.selected, true)) {
                 cat.selected = !cat.selected;
+                toggled = false;
                 c.changed = true;
             }
         } else _ = c.leaf(.{ .width = .{ .px = 16 } }, .none, null);
+        if (toggled) {
+            a.expanded[i] = !a.expanded[i];
+            c.changed = true;
+        }
         {
-            const color = ui.Color.hex(spec.color);
-            const badge = ui.div(c).row().w(18).h(18).center().rounded(5).bg(color.alpha(0.16));
+            const color = ink(c, spec.kind);
+            const badge = ui.div(c).row().w(18).h(18).center().rounded(theme.radius.chip).bg(color.alpha(0.16));
             defer badge.end();
             ui.icon(c, iconOf(spec.kind), .{ .size = 10, .color = color });
         }
@@ -371,7 +391,7 @@ pub fn dialog(c: *ui.Context, a: *App) void {
     const cl = &a.cleaner;
     const forever = cl.selectedForever();
     const desc = if (forever)
-        "Caches, logs and other files move to the Trash. Git removes clean worktrees, and what is already in the Trash is deleted for good."
+        "Caches, logs and other files move to the Trash. Git removes clean worktrees with their ignored files, and what is already in the Trash is deleted for good."
     else
         "The files move to the Trash. Apps make their caches again as they need them.";
     if (kit.dialog(c, "clean", &a.confirm_clean, .{ .title = c.print("Clean {s}?", .{procs.bytes(&b, cl.selectedBytes())}), .description = desc, .ok = "Clean", .ok_variant = if (forever) .danger else .primary })) |d| {

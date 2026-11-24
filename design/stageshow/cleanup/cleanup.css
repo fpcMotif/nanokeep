@@ -1,0 +1,346 @@
+.nk {
+  /* Pinned, bottom bleed: the window sits one gutter in from the top and
+     sides of a quiet well and runs off the stage's bottom */
+  & .ss-stage {
+    --gutter: 32px;
+    --nk-dot-other: rgb(0 0 0 / 0.28);
+    --nk-dot-free: rgb(0 0 0 / 0.08);
+    --nk-sep: rgb(0 0 0 / 0.09);
+    --nk-label: rgb(0 0 0 / 0.86);
+    --nk-label-2: rgb(0 0 0 / 0.52);
+    --ss-text: #626165;
+    overflow: hidden;
+    border-radius: 14px;
+    background: var(--ss-well);
+  }
+
+  .nk-win {
+    position: absolute;
+    top: var(--gutter);
+    left: var(--gutter);
+    width: 656px;
+    height: 440px;
+    box-shadow: var(--ss-shadow-hero);
+    mask-image: linear-gradient(to bottom, #000 346px, transparent 368px);
+  }
+
+  .nk-win .ss-window__lights {
+    visibility: hidden;
+  }
+
+  .nk-mark {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+  }
+
+  /* ---- Sidebar ---- */
+
+  .nk-nav {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 8px 0;
+  }
+
+  .nk-nav-section {
+    padding: 10px 8px 4px;
+    color: var(--ss-text);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 14px;
+  }
+
+  .nk-nav-item {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    color: var(--nk-label);
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 16px;
+  }
+
+  .nk-nav-item[data-on] {
+    background: color-mix(in srgb, var(--ss-accent) 12%, transparent);
+  }
+
+  .nk-nav-icon {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    color: #7a7a7c;
+  }
+
+  .nk-nav-item[data-on] .nk-nav-icon {
+    color: var(--ss-accent);
+  }
+
+  .nk-nav-label {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .nk-nav-figure {
+    color: var(--ss-text);
+    font-size: 11px;
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .nk-nav-item[data-on] .nk-nav-figure {
+    color: var(--ss-accent);
+  }
+
+  /* ---- Content ---- */
+
+  /* The app's content column is one gray, its bar included, with white cards */
+  .nk-win .ss-window__main {
+    background: #f6f5f8;
+  }
+
+  .nk-win .ss-window__bar {
+    background: transparent;
+    border-bottom-color: transparent;
+  }
+
+  .nk-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 4px 16px 0;
+    background: transparent;
+  }
+
+  .nk-rescan[data-spin] svg {
+    rotate: 360deg;
+    transition: rotate 0.7s cubic-bezier(0.45, 0, 0.1, 1);
+  }
+
+  .nk-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    border-radius: 18px;
+    background: var(--ss-surface);
+    box-shadow: 0 0 0 0.5px var(--nk-sep), 0 1px 2px rgb(0 0 0 / 0.04);
+  }
+
+  .nk-summary {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+  }
+
+  /* 40 + 15 puts the figures on the rows' title edge below */
+  .nk-hero-tile {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--ss-accent) 12%, transparent);
+    color: var(--ss-accent);
+  }
+
+  .nk-figures {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .nk-label,
+  .nk-sub {
+    color: var(--ss-text);
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+  }
+
+  .nk-total {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin: 2px 0 1px;
+    color: var(--ss-text-strong);
+    font-size: 30px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 36px;
+    white-space: nowrap;
+  }
+
+  .nk-unit {
+    color: var(--ss-text);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0;
+  }
+
+  .nk-clean {
+    align-self: center;
+  }
+
+  .nk-dots {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(4, 4px);
+    gap: 3px;
+  }
+
+  .nk-dots span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    transition: background-color 0.2s ease;
+  }
+
+  /* ---- Table ---- */
+
+  .nk-table {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .nk-row {
+    display: grid;
+    grid-template-columns: 15px 20px minmax(0, 1fr) 72px;
+    align-items: center;
+    gap: 10px;
+    height: 36px;
+    padding: 0 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 16px;
+  }
+
+  .nk-row:nth-child(even) {
+    background: rgb(0 0 0 / 0.022);
+  }
+
+  .nk-check {
+    display: grid;
+    place-items: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+    background: var(--ss-surface);
+    color: #fff;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .nk-check svg {
+    opacity: 0;
+    scale: 0.6;
+    transition: opacity 0.15s ease, scale 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  }
+
+  .nk-check[data-on] {
+    background: var(--ss-accent);
+    box-shadow: inset 0 0 0 1px var(--ss-accent);
+  }
+
+  .nk-check[data-on] svg {
+    opacity: 1;
+    scale: 1;
+  }
+
+  .nk-check[data-hover]:not([data-on]) {
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.32);
+  }
+
+  .nk-row-tile {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+  }
+
+  .nk-row-text {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .nk-row-title {
+    flex: none;
+    color: var(--ss-text-strong);
+    font-weight: 600;
+    transition: color 0.3s ease;
+  }
+
+  .nk-row-desc {
+    overflow: hidden;
+    color: var(--ss-text);
+    font-size: 12px;
+    text-overflow: ellipsis;
+  }
+
+  .nk-row-size {
+    color: var(--ss-text-strong);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+    transition: color 0.3s ease;
+  }
+
+  .nk-row[data-gone] .nk-row-title,
+  .nk-row[data-gone] .nk-row-size {
+    color: var(--ss-text);
+  }
+
+  /* ---- Compact: no sidebar, the card and rows at the phone column's width ---- */
+
+  & .ss-stage[data-layout='compact'] {
+    --gutter: 16px;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-win {
+    width: 326px;
+    height: 480px;
+    mask-image: linear-gradient(to bottom, #000 300px, transparent 324px);
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-win .ss-window__lights {
+    display: none;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-win .ss-window__title[data-toolbar] {
+    margin-left: 0;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-body {
+    padding: 4px 12px 0;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-card {
+    padding: 14px;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-hero-tile,
+  & .ss-stage[data-layout='compact'] .nk-row-desc {
+    display: none;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-card {
+    gap: 14px;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-row {
+    height: 34px;
+    padding: 0 14px;
+  }
+}

@@ -250,11 +250,16 @@ pub const Inventory = struct {
     fn startMeasure(inv: *Inventory) void {
         const n = inv.apps.items.len;
         const paths = inv.gpa.alloc([:0]const u8, n) catch return;
-        const out = inv.gpa.alloc(walk.Size, n) catch return inv.gpa.free(paths);
+        var copied: usize = 0;
+        for (inv.apps.items) |a| {
+            paths[copied] = inv.gpa.dupeSentinel(u8, a.path, 0) catch break;
+            copied += 1;
+        }
+        if (copied < n) return inv.freePaths(paths, copied);
+        const out = inv.gpa.alloc(walk.Size, n) catch return inv.freePaths(paths, n);
         @memset(out, .{});
-        for (inv.apps.items, 0..) |a, i| paths[i] = a.path;
         const m = inv.gpa.create(Measure) catch {
-            inv.gpa.free(paths);
+            inv.freePaths(paths, n);
             return inv.gpa.free(out);
         };
         m.* = .{ .inv = inv, .generation = inv.generation, .paths = paths, .out = out, .pool = .{ .gpa = inv.gpa, .paths = paths, .out = out } };
@@ -271,22 +276,31 @@ pub const Inventory = struct {
 
     fn measured(inv: *Inventory, m: *Measure) void {
         if (m.thread) |t| t.join();
-        if (m.generation == inv.generation) for (inv.apps.items, m.out) |*a, s| {
+        const current = m.generation == inv.generation;
+        if (current) for (inv.apps.items, m.out) |*a, s| {
             a.size = s;
             a.measured = true;
         };
         inv.freeMeasure(m);
+        if (!current) inv.startMeasure();
         inv.tell();
     }
 
+    fn freePaths(inv: *Inventory, paths: [][:0]const u8, copied: usize) void {
+        for (paths[0..copied]) |p| inv.gpa.free(p);
+        inv.gpa.free(paths);
+    }
+
     fn freeMeasure(inv: *Inventory, m: *Measure) void {
-        inv.gpa.free(m.paths);
+        inv.freePaths(m.paths, m.paths.len);
         inv.gpa.free(m.out);
         inv.gpa.destroy(m);
         inv.measuring = null;
     }
 
     pub fn remove(inv: *Inventory, index: usize) void {
+        if (inv.measuring) |m| m.pool.cancel.store(true, .monotonic);
+        inv.generation += 1;
         const a = inv.apps.orderedRemove(index);
         a.free(inv.gpa);
         inv.tell();

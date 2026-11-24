@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nanokeep, a housekeeper for your Mac</title>
+  <meta name="description" content="nanokeep is a native Mac app that finds caches, builds and logs, shows what each clean frees, and watches your processor and memory.">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    document.documentElement.classList.add('js');
+    document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: 'demo/cleanup-demo.css' }));
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="container nav__row">
+      <a class="wordmark" href="#top" aria-label="nanokeep, back to the top">nanokeep</a>
+      <nav class="nav__links" aria-label="Page">
+        <a href="#screens">Screens</a>
+        <a href="#clears">What it clears</a>
+        <a class="btn btn--quiet btn--small" href="https://github.com/fpcMotif/nanokeep">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="container hero__grid">
+        <div class="hero__text">
+          <h1 class="display-s">See what fills your Mac. Clear it.</h1>
+          <p class="lead">nanokeep finds caches, builds and logs, then shows what each clean frees.</p>
+          <div class="actions">
+            <a class="btn" href="https://github.com/fpcMotif/nanokeep">View on GitHub</a>
+            <a class="btn btn--quiet" href="#screens">See the screens</a>
+          </div>
+        </div>
+        <figure class="hero__visual">
+          <div class="demo" data-slot="hero" data-kind="product" data-alt="The Cleanup page: Developer is ticked, Clean is pressed, and the found total drops from 9.5 GB to 1.4 GB" data-ss-fill>
+            <img src="images/cleanup-poster.png" width="1440" height="800" fetchpriority="high" alt="The Cleanup page after a clean: 1.4 GB left to clean and a button that reads Freed 8.1 GB">
+            <div id="cleanup-demo"></div>
+          </div>
+          <figcaption>
+            <span>The Cleanup page, replayed in your browser.</span>
+            <button class="textbtn" id="cleanup-demo-toggle" type="button" aria-pressed="false" hidden>Pause the demo</button>
+          </figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="screens" id="screens">
+      <div class="container">
+        <div class="headrow">
+          <h2>Three screens from the app</h2>
+          <div class="tabs" role="tablist" aria-label="Screens">
+            <button class="tab" type="button" role="tab" id="tab-cpu" aria-controls="panel-cpu" aria-selected="true">CPU</button>
+            <button class="tab" type="button" role="tab" id="tab-scan" aria-controls="panel-scan" aria-selected="false" tabindex="-1">Scanning</button>
+            <button class="tab" type="button" role="tab" id="tab-found" aria-controls="panel-found" aria-selected="false" tabindex="-1">Cleanup</button>
+          </div>
+        </div>
+        <figure class="screen" role="tabpanel" id="panel-cpu" aria-labelledby="tab-cpu">
+          <div class="shot" data-slot="screen-cpu" data-kind="product" data-alt="The CPU page with processor load, cores and activity">
+            <img src="images/cpu.png" width="2480" height="1640" loading="lazy" alt="The CPU page shows processor load over an hour, the load on each core and the load averages.">
+          </div>
+          <figcaption>The CPU page tracks load, every core and the temperature.</figcaption>
+        </figure>
+        <figure class="screen" role="tabpanel" id="panel-found" aria-labelledby="tab-found">
+          <div class="shot" data-slot="screen-cleanup" data-kind="product" data-alt="The Cleanup page with a found total, the disk map and eight categories">
+            <img src="images/cleanup-found.png" width="2480" height="1640" loading="lazy" alt="The Cleanup page lists eight categories under a disk map, with Caches and Logs ticked and a Clean button.">
+          </div>
+          <figcaption>Cleanup lists each category with its size before you clean.</figcaption>
+        </figure>
+        <figure class="screen" role="tabpanel" id="panel-scan" aria-labelledby="tab-scan">
+          <div class="shot" data-slot="screen-scanning" data-kind="product" data-alt="The Cleanup page during a scan">
+            <img src="images/cleanup-scanning.png" width="2480" height="1640" loading="lazy" alt="The Cleanup page during a scan, with a running total and a Cancel button.">
+          </div>
+          <figcaption>A scan fills the disk map as it measures each category.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="clears" id="clears">
+      <div class="container clears__grid">
+        <div class="clears__head">
+          <h2>What Cleanup looks for</h2>
+          <p class="lead">You tick the ones to clear.</p>
+        </div>
+        <dl class="index">
+          <div class="index__row"><dt>Caches</dt><dd>Apps make them again as they need them.</dd></div>
+          <div class="index__row"><dt>Package caches</dt><dd>Downloads that package managers fetch again.</dd></div>
+          <div class="index__row"><dt>Developer</dt><dd>Xcode’s builds, and git worktrees with nothing to commit.</dd></div>
+          <div class="index__row"><dt>Agent sessions</dt><dd>Claude Code’s and Codex’s sessions over a month old.</dd></div>
+          <div class="index__row"><dt>Installers</dt><dd>Disk images and packages left in Downloads.</dd></div>
+          <div class="index__row"><dt>Logs</dt><dd>Apps’ logs and crash reports.</dd></div>
+          <div class="index__row"><dt>Temporary files</dt><dd>Left by apps, unchanged for three days.</dd></div>
+          <div class="index__row"><dt>Trash</dt><dd>Deleted for good.</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="dark" id="dark">
+      <div class="container">
+        <div class="headsplit">
+          <h2>Dark follows your Mac</h2>
+          <p class="lead">nanokeep follows the system appearance, light or dark.</p>
+        </div>
+        <figure class="screen">
+          <div class="shot shot--wide" data-slot="screen-dark" data-kind="product" data-alt="The Memory page in the dark appearance">
+            <img src="images/memory-dark.png" width="2480" height="1640" loading="lazy" alt="The Memory page in the dark appearance, with memory in use, a pressure ring and swap.">
+          </div>
+          <figcaption>The Memory page in the dark appearance.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="build" id="build">
+      <div class="container build__grid">
+        <div class="build__text">
+          <h2>Build it from source</h2>
+          <p class="lead">No release exists yet. nanokeep builds with Zig 0.17 on macOS.</p>
+          <div class="actions">
+            <a class="btn" href="https://github.com/fpcMotif/nanokeep">View on GitHub</a>
+          </div>
+        </div>
+        <figure class="code">
+          <pre><code>git clone https://github.com/fpcMotif/nanokeep.git
+cd nanokeep
+zig build run</code></pre>
+        </figure>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer__grid">
+      <p class="footer__statement">Built in Zig. Drawn on the GPU with nanoui.</p>
+      <ul class="footer__links">
+        <li><a href="https://github.com/fpcMotif/nanokeep">nanokeep on GitHub</a></li>
+        <li><a href="https://github.com/fpcMotif/nanoui">nanoui on GitHub</a></li>
+        <li><a href="#top">Back to the top</a></li>
+      </ul>
+    </div>
+  </footer>
+
+  <script defer src="demo/cleanup-demo.js"></script>
+  <script>
+    (() => {
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const show = (tab, focus) => {
+        tabs.forEach((t) => {
+          const on = t === tab;
+          t.setAttribute('aria-selected', String(on));
+          t.tabIndex = on ? 0 : -1;
+          document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+        });
+        if (focus) tab.focus({ preventScroll: true });
+      };
+      tabs.forEach((t, i) => {
+        t.addEventListener('click', () => show(t, false));
+        t.addEventListener('keydown', (e) => {
+          const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+          if (!step) return;
+          e.preventDefault();
+          show(tabs[(i + step + tabs.length) % tabs.length], true);
+        });
+      });
+      if (tabs.length) show(tabs[0], false);
+    })();
+  </script>
+</body>
+</html>

@@ -1,4 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+comptime {
+    if (builtin.zig_version.major != 0 or builtin.zig_version.minor != 17) @compileError("nanokeep builds with Zig 0.17.x. Run `mise exec -- zig build`; mise.toml pins the version.");
+}
 
 const info_plist =
     \\<?xml version="1.0" encoding="UTF-8"?>

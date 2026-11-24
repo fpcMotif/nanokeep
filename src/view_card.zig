@@ -6,59 +6,103 @@ const metrics = @import("metrics.zig");
 const groups = @import("groups.zig");
 const procs = @import("procs.zig");
 const app_mod = @import("app.zig");
+const theme = @import("theme.zig");
 const App = app_mod.App;
+const Hue = theme.Hue;
 
-pub const cpu_tint = 0x0a84ff;
-pub const memory_tint = 0x34c759;
-pub const gpu_tint = 0xff2d55;
-pub const disk_tint = 0xff9500;
-pub const network_tint = 0x30b0c7;
-pub const energy_tint = 0xe5a00d;
-pub const about_tint = 0x8e8e93;
+pub const cpu_tint: Hue = .violet;
+pub const memory_tint: Hue = .sand;
+pub const gpu_tint: Hue = .violet;
+pub const disk_tint: Hue = .sand;
+pub const network_tint: Hue = .lime;
+pub const energy_tint: Hue = .yellow;
+pub const about_tint: Hue = .neutral;
 
-pub const user_color = 0x0a84ff;
-pub const system_color = 0xff3b30;
-pub const app_color = 0x34c759;
-pub const wired_color = 0xff9500;
-pub const compressed_color = 0x32ade6;
-pub const cached_color = 0x98989d;
-pub const read_color = 0x32ade6;
-pub const write_color = 0xff9500;
+pub const user_color: Hue = .violet;
+pub const system_color: Hue = .sand;
+pub const app_color: Hue = .sand;
+pub const wired_color: Hue = .violet;
+pub const compressed_color: Hue = .lime;
+pub const cached_color: Hue = .neutral;
+pub const read_color: Hue = .lime;
+pub const write_color: Hue = .sand;
 
-pub const radius = 18;
-pub const lift: ui.Shadow = .{ .color = .{ .a = 0.055 }, .blur = 20, .y = 6 };
+pub const radius = theme.radius.card;
+pub const pad = theme.space.card;
+const inset = theme.inner(radius, pad);
 
 pub fn card(c: *ui.Context) ui.Div {
-    return ui.div(c).column().wFull().p(16).gap(12).rounded(radius).bg(c.theme.surface).shadow(lift);
+    return theme.surface(c, ui.div(c).column().wFull().p(pad).gap(theme.space.xl), radius);
 }
 
 pub fn half(c: *ui.Context) ui.Div {
-    return ui.div(c).column().grow().w(0).p(16).gap(12).rounded(radius).bg(c.theme.surface).shadow(lift);
+    return theme.surface(c, ui.div(c).column().grow().w(0).p(pad).gap(theme.space.xl), radius);
 }
 
 pub fn pair(c: *ui.Context) ui.Div {
-    return ui.div(c).row().wFull().gap(14).itemsStretch();
+    return ui.div(c).row().wFull().gap(theme.space.gutter).itemsStretch();
 }
 
-pub fn head(c: *ui.Context, icon: []const u8, tint: u24, title: []const u8) ui.Div {
-    const color = ui.Color.hex(tint);
-    const h = ui.div(c).row().wFull().gap(8).itemsCenter();
-    {
-        const badge = ui.div(c).row().w(24).h(24).center().rounded(7).bg(color.alpha(0.14));
-        defer badge.end();
-        ui.icon(c, icon, .{ .size = 12, .color = color });
-    }
-    ui.text(c, title, .{ .size = 14, .weight = .semibold, .color = color });
+pub fn head(c: *ui.Context, icon: []const u8, tint: Hue, title: []const u8) ui.Div {
+    const h = ui.div(c).row().wFull().h(20).gap(theme.space.md).itemsCenter();
+    ui.icon(c, icon, .{ .size = 13, .color = theme.hue(c, tint) });
+    ui.text(c, title, .{ .size = 13, .weight = .semibold });
     ui.spacer(c);
     return h;
 }
 
-pub fn legend(c: *ui.Context, color: u24, title: []const u8) void {
+pub fn legend(c: *ui.Context, color: Hue, title: []const u8) void {
     ui.key(c, title);
     const d = ui.div(c).row().gap(5).itemsCenter();
     defer d.end();
-    dot(c, 6, .hex(color));
+    dot(c, 6, theme.hue(c, color));
     ui.text(c, title, .{ .size = 11, .color = c.theme.muted });
+}
+
+fn digitAdvance(w: ui.Weight) f32 {
+    return switch (w) {
+        .regular => 0.59,
+        .medium => 0.6,
+        .semibold => 0.61,
+        .bold => 0.625,
+    };
+}
+
+pub fn figure(c: *ui.Context, s: []const u8, style: ui.TextStyle) void {
+    const cell = @ceil(style.size * digitAdvance(style.weight) * 2) / 2;
+    const r = ui.div(c).row().itemsEnd();
+    defer r.end();
+    var from: usize = 0;
+    for (s, 0..) |ch, i| {
+        if (!std.ascii.isDigit(ch)) continue;
+        if (i > from) ui.text(c, s[from..i], style);
+        const d = ui.div(c).row().w(cell).justifyCenter();
+        ui.text(c, s[i .. i + 1], style);
+        d.end();
+        from = i + 1;
+    }
+    if (from < s.len) ui.text(c, s[from..], style);
+}
+
+pub fn segmented(c: *ui.Context, options: []const []const u8, selected: *usize) bool {
+    const p = theme.of(c);
+    const track = ui.div(c).row().h(28).p(2).gap(2).roundedFull().bg(p.fill_2);
+    defer track.end();
+    var changed = false;
+    for (options, 0..) |opt, i| {
+        ui.key(c, opt);
+        const on = selected.* == i;
+        var d = ui.div(c).row().hFull().px(12).center().roundedFull().control();
+        d = if (on) d.bg(p.win).shadow(.{ .color = .{ .a = 0.14 }, .blur = 3, .y = 1 }) else d.hover(p.fill);
+        defer d.end();
+        if (d.clicked() and !on) {
+            selected.* = i;
+            changed = true;
+            c.changed = true;
+        }
+        ui.text(c, opt, .{ .size = 12.5, .weight = .medium, .color = if (on) p.label else p.label_2 });
+    }
+    return changed;
 }
 
 pub fn tag(c: *ui.Context, title: []const u8, color: ui.Color) void {
@@ -66,7 +110,7 @@ pub fn tag(c: *ui.Context, title: []const u8, color: ui.Color) void {
     const d = ui.div(c).row().px(8).py(3).gap(5).itemsCenter().roundedFull().bg(color.alpha(0.16));
     defer d.end();
     dot(c, 5, color);
-    ui.text(c, title, .{ .size = 11, .weight = .semibold, .color = color });
+    ui.text(c, title, .{ .size = 11, .weight = .semibold });
 }
 
 pub fn dot(c: *ui.Context, size: f32, color: ui.Color) void {
@@ -79,7 +123,7 @@ pub fn big(c: *ui.Context, label: []const u8, value: []const u8, unit: []const u
     if (label.len > 0) ui.text(c, label, .{ .size = 12, .color = c.theme.muted });
     const r = ui.div(c).row().gap(4).itemsEnd();
     defer r.end();
-    ui.text(c, value, .{ .size = 34, .weight = .bold });
+    figure(c, value, .{ .size = 34, .weight = .bold });
     if (unit.len > 0) {
         const u = ui.div(c).column().pb(5);
         defer u.end();
@@ -92,7 +136,7 @@ pub fn stat(c: *ui.Context, label: []const u8, value: []const u8, sub: []const u
     const col = ui.div(c).column().grow().w(0).gap(3).clip();
     defer col.end();
     ui.text(c, label, .{ .size = 11.5, .color = c.theme.muted });
-    ui.text(c, value, .{ .size = 13, .weight = .semibold });
+    figure(c, value, .{ .size = 13, .weight = .semibold });
     if (sub.len > 0) ui.text(c, sub, .{ .size = 10.5, .color = c.theme.muted });
 }
 
@@ -105,7 +149,7 @@ pub fn kv(c: *ui.Context, label: []const u8, value: []const u8) void {
         defer l.end();
         ui.text(c, label, .{ .size = 12.5, .color = c.theme.muted });
     }
-    ui.text(c, value, .{ .size = 12.5, .weight = .semibold });
+    figure(c, value, .{ .size = 12.5, .weight = .semibold });
 }
 
 pub fn bar(c: *ui.Context, frac: f32, color: ui.Color, height: f32) void {
@@ -159,7 +203,7 @@ pub fn donut(c: *ui.Context, size: f32, slices: []const Slice, center: []const u
     if (sub.len > 0) ui.text(c, sub, .{ .size = size * 0.085, .color = th.muted });
 }
 
-pub const Series = struct { color: u24, value: *const fn (metrics.Sample) f32 };
+pub const Series = struct { color: Hue, value: *const fn (metrics.Sample) f32 };
 
 pub const ChartOptions = struct {
     rows: usize = 14,
@@ -170,15 +214,18 @@ pub const ChartOptions = struct {
     pad: f32 = 10,
 };
 
-pub fn chart(c: *ui.Context, a: *App, key: []const u8, tint: u24, series: []const Series, opts: ChartOptions) void {
+const unmeasured_chart_w = 160;
+
+pub fn chart(c: *ui.Context, a: *App, key: []const u8, tint: Hue, series: []const Series, opts: ChartOptions) void {
     const th = c.theme;
-    const color = ui.Color.hex(tint);
+    const color = theme.hue(c, tint);
     ui.key(c, key);
-    const panel = ui.div(c).column().wFull().p(opts.pad).gap(6).rounded(10).bg(color.alpha(0.09));
+    const panel = ui.div(c).column().wFull().p(opts.pad).gap(6).rounded(inset).bg(color.alpha(0.09)).clip();
     defer panel.end();
     const grid = ui.div(c).column().wFull().gap(opts.gap);
     const rect = grid.interaction().rect;
-    const width = if (rect) |r| r.w else 400;
+    if (rect == null) c.frameIn(0);
+    const width = if (rect) |r| r.w else unmeasured_chart_w;
     const cols: usize = @intFromFloat(@max(8, @floor((width + opts.gap) / (opts.dot + opts.gap))));
     const h = &a.metrics.history;
     const now = if (h.last()) |s| s.t else 0;
@@ -204,7 +251,7 @@ pub fn chart(c: *ui.Context, a: *App, key: []const u8, tint: u24, series: []cons
         for (0..shown) |i| {
             var fill = empty;
             for (0..series.len) |k| if (level < heights[i][k]) {
-                fill = .hex(series[k].color);
+                fill = theme.hue(c, series[k].color);
                 break;
             };
             dot(c, opts.dot, fill);
@@ -261,12 +308,12 @@ pub fn valueText(c: *ui.Context, g: *const groups.Group, m: Metric) []const u8 {
 
 pub fn appGlyph(c: *ui.Context, g: *const groups.Group, size: f32) void {
     const th = c.theme;
-    const d = ui.div(c).row().w(size).h(size).center().rounded(size * 0.26).bg(th.muted.alpha(0.18));
+    const d = ui.div(c).row().w(size).h(size).center().rounded(theme.radius.chip).bg(theme.of(c).fill_2);
     defer d.end();
     ui.icon(c, if (g.bundle.len > 0) "app.fill" else "terminal", .{ .size = size * 0.55, .color = th.muted });
 }
 
-pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tint: u24, m: Metric, sort: groups.Sort) void {
+pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tint: Hue, m: Metric, sort: groups.Sort) void {
     const th = c.theme;
     const box = card(c);
     defer box.end();
@@ -274,7 +321,7 @@ pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tin
         const h = head(c, icon, tint, title);
         defer h.end();
         ui.key(c, "show-all");
-        const link = ui.div(c).row().gap(3).itemsCenter().control();
+        const link = ui.div(c).row().h(24).px(8).gap(3).itemsCenter().rounded(theme.radius.row).control().hover(theme.of(c).fill);
         defer link.end();
         if (link.clicked()) {
             a.page = .processes;
@@ -282,8 +329,8 @@ pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tin
             a.sort = sort;
             a.reversed = false;
         }
-        ui.text(c, "Show All", .{ .size = 12, .weight = .semibold, .color = .hex(tint) });
-        ui.icon(c, "chevron.right", .{ .size = 9, .weight = .bold, .color = .hex(tint) });
+        ui.text(c, "Show All", .{ .size = 12, .weight = .medium, .color = th.accent });
+        ui.icon(c, "chevron.right", .{ .size = 9, .weight = .bold, .color = th.accent });
     }
     var idx: [10]u32 = undefined;
     const n = top(a, m, &idx);
@@ -297,24 +344,35 @@ pub fn topList(c: *ui.Context, a: *App, title: []const u8, icon: []const u8, tin
         while (i < n) : (i += 2) {
             const g = &a.everyone.groups.items[idx[i]];
             ui.key(c, c.print("top-{d}", .{g.key}));
-            const r = ui.div(c).row().wFull().h(30).gap(8).itemsCenter();
+            const r = ui.div(c).row().wFull().h(30).gap(8).itemsCenter().control();
             defer r.end();
+            if (r.clicked()) {
+                a.page = .processes;
+                a.show = @intFromEnum(groups.Show.all);
+                a.sort = sort;
+                a.reversed = false;
+                a.selected = .{ .group = g.key };
+            }
+            const hot = r.hovered();
             appGlyph(c, g, 18);
             {
                 const name = ui.div(c).row().grow().w(0).gap(6).itemsCenter().clip();
                 defer name.end();
-                ui.text(c, g.name, .{ .size = 12.5 });
+                ui.text(c, g.name, .{ .size = 12.5, .color = if (hot) th.accent else th.text });
                 if (g.count > 1) ui.text(c, c.print("{d}", .{g.count}), .{ .size = 10.5, .color = th.muted });
             }
-            ui.text(c, valueText(c, g, m), .{ .size = 12.5, .weight = .semibold });
+            figure(c, valueText(c, g, m), .{ .size = 12.5, .weight = .semibold });
         }
     }
 }
 
+const three_row_treemap_h = 120;
+const labelled_tile_w = 72;
+
 pub fn treemap(c: *ui.Context, a: *App, height: f32) void {
     const th = c.theme;
     var idx: [9]u32 = undefined;
-    const n = top(a, .memory, &idx);
+    const n = top(a, .memory, idx[0..if (height < three_row_treemap_h) 8 else idx.len]);
     const list = a.everyone.groups.items;
     const lead: usize = @min(n, 4);
     const r = ui.div(c).row().wFull().h(height).gap(6);
@@ -344,15 +402,19 @@ pub fn treemap(c: *ui.Context, a: *App, height: f32) void {
 fn tile(c: *ui.Context, g: *const groups.Group, weight: f32, tall: bool) void {
     const th = c.theme;
     ui.key(c, c.print("tile-{d}", .{g.key}));
-    const t = ui.div(c).column().w(0).hFull().p(8).gap(2).rounded(9).bg(th.background).clip();
+    const t = ui.div(c).column().w(0).hFull().p(8).gap(2).rounded(theme.radius.row).bg(theme.of(c).fill).clip();
     c.node(t.index).style.grow = weight;
     defer t.end();
+    const it = t.interaction();
+    const rect = it.rect;
+    if (rect == null) c.frameIn(0);
+    var b: [32]u8 = undefined;
+    kit.tooltip(c, it, c.print("{s}, {s}", .{ g.name, procs.bytes(&b, g.memory) }), .{});
     appGlyph(c, g, 16);
     ui.spacer(c);
-    if (!tall) return;
+    if (!tall or (rect orelse return).w < labelled_tile_w) return;
     ui.text(c, g.name, .{ .size = 11.5, .weight = .semibold });
-    var b: [32]u8 = undefined;
-    ui.text(c, c.print("{s}", .{procs.bytes(&b, g.memory)}), .{ .size = 10.5, .color = th.muted });
+    figure(c, c.print("{s}", .{procs.bytes(&b, g.memory)}), .{ .size = 10.5, .color = th.muted });
 }
 
 pub fn energyRows(c: *ui.Context, a: *App, count: usize) void {
@@ -378,11 +440,20 @@ pub fn energyRows(c: *ui.Context, a: *App, count: usize) void {
                 ui.text(c, g.name, .{ .size = 12 });
             }
             var b: [32]u8 = undefined;
-            ui.text(c, c.print("{s}", .{metrics.watts(&b, g.energy)}), .{ .size = 11.5, .color = th.muted });
+            figure(c, c.print("{s}", .{metrics.watts(&b, g.energy)}), .{ .size = 11.5, .color = th.muted });
         }
-        bar(c, g.energy / @max(most, 0.001), .hex(energy_tint), 4);
+        bar(c, g.energy / @max(most, 0.001), theme.hue(c, energy_tint), 4);
     }
     if (n == 0) ui.text(c, "Measuring…", .{ .size = 12, .color = th.muted });
+}
+
+pub fn emptyList(c: *ui.Context, icon: []const u8, title: []const u8, hint: []const u8) void {
+    const th = c.theme;
+    const box = ui.div(c).column().wFull().grow().center().gap(6);
+    defer box.end();
+    ui.icon(c, icon, .{ .size = 26, .color = th.muted.alpha(0.6) });
+    ui.text(c, title, .{ .size = 14, .weight = .semibold });
+    ui.text(c, hint, .{ .size = 12, .color = th.muted });
 }
 
 pub fn pageHeader(c: *ui.Context, a: *App, title: []const u8, sub: []const u8, ranged: bool) void {
@@ -394,11 +465,12 @@ pub fn pageHeader(c: *ui.Context, a: *App, title: []const u8, sub: []const u8, r
         var titles: [ranges.len][]const u8 = undefined;
         for (ranges, 0..) |r, i| titles[i] = r.title();
         var sel: usize = @intFromEnum(a.range);
-        if (ui.segmented(c, &titles, &sel)) a.range = @enumFromInt(sel);
+        if (segmented(c, &titles, &sel)) a.range = @enumFromInt(sel);
     }
     pauseButton(c, a);
 }
 
 pub fn pauseButton(c: *ui.Context, a: *App) void {
+    if (!a.live) ui.text(c, "Paused", .{ .size = 12, .weight = .semibold, .color = c.theme.muted });
     if (kit.iconButton(c, if (a.live) "pause.fill" else "play.fill", .{ .size = .sm, .variant = .secondary, .pill = true, .tooltip = if (a.live) "Pause Updates" else "Resume Updates" }).clicked) a.live = !a.live;
 }
