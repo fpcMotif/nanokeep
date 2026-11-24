@@ -1,0 +1,30 @@
+[
+ {
+  "shape": "Narrative Workflow",
+  "theme": "custom (DESIGN.md, Palindrome)",
+  "axes": "light/grotesk-sans/chromatic-violet",
+  "hero": "Stage",
+  "nav": "edge-aligned",
+  "footer": "statement",
+  "imagery": "screenshots 4 and the live Cleanup demo",
+  "photos": [],
+  "entry": "index.html",
+  "fingerprint": "81ffb9",
+  "sections": [
+   "Hero",
+   "Switcher",
+   "Index",
+   "Showcase",
+   "Split",
+   "Footer"
+  ],
+  "signature": "the Cleanup page cleaning itself",
+  "waived": [
+   "1",
+   "82"
+  ],
+  "prompt": "nanokeep website from real PNGs and the Stageshow cleanup demo",
+  "date": "2026-11-24",
+  "mode": "build"
+ }
+]

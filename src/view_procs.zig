@@ -5,6 +5,7 @@ const kit = nanoui.kit;
 const procs = @import("procs.zig");
 const groups = @import("groups.zig");
 const table = @import("view_table.zig");
+const theme = @import("theme.zig");
 const view = @import("view.zig");
 const App = @import("app.zig").App;
 
@@ -13,7 +14,7 @@ const Col = struct { title: []const u8, sort: groups.Sort, w: ?f32, roomy: bool 
 const cols = [_]Col{
     .{ .title = "Name", .sort = .name, .w = null },
     .{ .title = "% CPU", .sort = .cpu, .w = 64 },
-    .{ .title = "Memory", .sort = .memory, .w = 84 },
+    .{ .title = "Memory", .sort = .memory, .w = 84 + table.meter_w + theme.space.md },
     .{ .title = "Threads", .sort = .threads, .w = 64, .roomy = true },
     .{ .title = "Disk", .sort = .disk, .w = 84 },
     .{ .title = "CPU Time", .sort = .time, .w = 84, .roomy = true },
@@ -27,7 +28,7 @@ pub fn page(c: *ui.Context, a: *App) void {
         const h = view.header(c, "Processes", if (view.narrow(c)) "" else c.print("{d} shown in {d} groups · {d} in all", .{ a.table.shown, a.table.groups.items.len, a.sampler.procs.items.len }));
         defer h.end();
         _ = ui.textField(c, &a.query, .{ .placeholder = "Search", .width = .{ .px = if (view.narrow(c)) 84 else 160 }, .size = 12 });
-        _ = ui.segmented(c, &.{ "All", "Apps", "Mine", "System" }, &a.show);
+        _ = @import("view_card.zig").segmented(c, &.{ "All", "Apps", "Mine", "System" }, &a.show);
         const chosen = a.selected != null;
         if (ui.button(c, "Quit", .{ .size = 12, .disabled = !chosen }).clicked) {
             a.force = false;
@@ -53,7 +54,9 @@ pub fn page(c: *ui.Context, a: *App) void {
         @import("view_card.zig").emptyList(c, "magnifyingglass", "No Processes Found", c.print("Nothing matches “{s}”.", .{query}));
     } else {
         var rows = ui.list(c, .{ .count = a.table.rows.items.len, .row_height = table.row_h, .padding = .{ .left = 8, .right = 8 } });
-        while (rows.next()) |i| row(c, a, a.table.rows.items[i], i);
+        var most: u64 = 0;
+        for (a.table.groups.items) |g| most = @max(most, g.memory);
+        while (rows.next()) |i| row(c, a, a.table.rows.items[i], i, most);
         rows.end();
     }
     table.line(c);
@@ -62,22 +65,20 @@ pub fn page(c: *ui.Context, a: *App) void {
         defer foot.end();
         ui.text(c, c.print("{d} of {d} processes", .{ a.table.shown, a.sampler.procs.items.len }), .{ .size = 11, .color = th.muted });
         ui.spacer(c);
-        table.dot(c, 7, .hex(0x0a84ff));
+        table.dot(c, 7, theme.hue(c, .violet));
         ui.text(c, c.print("CPU {d:.1}%", .{a.sampler.system.cpu}), .{ .size = 11, .mono = true });
-        table.dot(c, 7, .hex(0x30d158));
+        table.dot(c, 7, theme.hue(c, .sand));
         ui.text(c, c.print("Memory {s}", .{view.size(c, a.sampler.system.mem_used)}), .{ .size = 11, .mono = true });
     }
 }
 
-fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
+fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize, most: u64) void {
     const th = c.theme;
     const g = &a.table.groups.items[r.group];
     const p: ?*const procs.Proc = if (r.member) |m| &a.sampler.procs.items[m] else null;
     ui.key(c, if (p) |pp| c.print("pid-{d}", .{pp.pid}) else c.print("group-{d}", .{g.key}));
     const sel = if (a.selected) |s| (s.group == g.key and ((s.pid == null and p == null) or (p != null and s.pid != null and s.pid.? == p.?.pid))) else false;
-    const bg = if (sel) th.accent.alpha(0.2) else if (i % 2 == 1) th.surface_hover.alpha(0.45) else th.background.alpha(0);
-    var d = ui.div(c).row().wFull().h(table.row_h).px(6).itemsCenter().rounded(6).bg(bg).control();
-    if (!sel) d = d.hover(th.surface_hover);
+    const d = table.row(c, sel, i);
     defer d.end();
     const it = d.interaction();
     const open = a.expanded_groups.contains(g.key);
@@ -99,7 +100,7 @@ fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
         if (p != null) _ = c.leaf(.{ .width = .{ .px = 14 } }, .none, null);
         ui.text(c, if (p) |pp| pp.name else g.name, .{ .size = 12.5, .color = if (mine) th.text else th.muted });
         if (p == null and g.count > 1) {
-            const badge = ui.div(c).row().px(5).h(15).center().rounded(4).bg(th.surface_hover);
+            const badge = ui.div(c).row().px(5).h(15).center().rounded(theme.radius.chip).bg(theme.of(c).fill_2);
             defer badge.end();
             ui.text(c, c.print("{d}", .{g.count}), .{ .size = 10, .mono = true, .color = th.muted });
         }
@@ -113,11 +114,12 @@ fn row(c: *ui.Context, a: *App, r: groups.Row, i: usize) void {
     const t = if (p) |pp| pp.cpu_time_ns else g.time_ns;
     const pid = if (p) |pp| pp.pid else g.pid;
     const dash = "–";
-    table.value(c, if (known) c.print("{d:.1}", .{cpu}) else dash, cols[1].w, null);
-    table.value(c, if (known) view.size(c, mem) else dash, cols[2].w, if (mem > 1_000_000_000) ui.Color.hex(0xff9f0a) else null);
+    const idle = theme.of(c).label_3;
+    table.value(c, if (known) c.print("{d:.1}", .{cpu}) else dash, cols[1].w, if (cpu < 0.05) idle else null);
+    table.metered(c, if (known) view.size(c, mem) else dash, cols[2].w.?, @as(f32, @floatFromInt(mem)) / @as(f32, @floatFromInt(@max(1, most))), .sand);
     const roomy = !view.narrow(c);
     if (roomy) table.value(c, if (known) c.print("{d}", .{threads}) else dash, cols[3].w, null);
-    table.value(c, if (known and disk >= 1) c.print("{s}/s", .{procs.bytes(&b, @intFromFloat(disk))}) else if (known) "0" else dash, cols[4].w, th.muted);
+    table.value(c, if (known and disk >= 1) c.print("{s}/s", .{procs.bytes(&b, @intFromFloat(disk))}) else if (known) "0" else dash, cols[4].w, if (disk >= 1) th.muted else idle);
     if (roomy) table.value(c, if (known) c.print("{s}", .{procs.duration(&b, t)}) else dash, cols[5].w, null);
     table.value(c, c.print("{d}", .{pid}), cols[6].w, th.muted);
     {

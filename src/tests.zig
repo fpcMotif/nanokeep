@@ -1913,7 +1913,7 @@ test "every page draws from this Mac's samples" {
     try std.testing.expect(n > 0);
     for (idx[1..n], 0..) |gi, k| try std.testing.expect(a.everyone.groups.items[gi].memory <= a.everyone.groups.items[idx[k]].memory);
     var tester: ui.Tester = undefined;
-    try tester.init(gpa, .init(&a, view), .{});
+    try tester.init(gpa, .init(&a, view), .{ .dark = std.c.getenv("NANOKEEP_SHOT_DARK") != null });
     defer tester.deinit();
     if (std.c.getenv("NANOKEEP_SHOT_MIN") != null) tester.resize(@import("app.zig").min_window_w, @import("app.zig").min_window_h) else tester.resize(wide_w, wide_h);
     const Want = struct { page: @import("app.zig").Page, text: []const u8 };

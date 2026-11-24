@@ -3,8 +3,12 @@
      sides of a quiet well and runs off the stage's bottom */
   & .ss-stage {
     --gutter: 32px;
-    --nk-dot-other: #c7c7cc;
-    --nk-dot-free: #ebebf0;
+    --nk-dot-other: rgb(0 0 0 / 0.28);
+    --nk-dot-free: rgb(0 0 0 / 0.08);
+    --nk-sep: rgb(0 0 0 / 0.09);
+    --nk-label: rgb(0 0 0 / 0.86);
+    --nk-label-2: rgb(0 0 0 / 0.52);
+    --ss-text: #626165;
     overflow: hidden;
     border-radius: 14px;
     background: var(--ss-well);
@@ -17,6 +21,11 @@
     width: 656px;
     height: 440px;
     box-shadow: var(--ss-shadow-hero);
+    mask-image: linear-gradient(to bottom, #000 346px, transparent 368px);
+  }
+
+  .nk-win .ss-window__lights {
+    visibility: hidden;
   }
 
   .nk-mark {
@@ -43,30 +52,32 @@
 
   .nk-nav-item {
     display: grid;
-    grid-template-columns: 20px minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
     align-items: center;
     gap: 8px;
     height: 28px;
-    padding: 0 8px 0 6px;
-    border-radius: var(--ss-radius-sm);
-    color: var(--ss-text-strong);
+    padding: 0 8px;
+    border-radius: 6px;
+    color: var(--nk-label);
     font-size: 13px;
+    font-weight: 500;
     line-height: 16px;
   }
 
   .nk-nav-item[data-on] {
-    background: color-mix(in srgb, var(--ss-accent) 14%, transparent);
-    color: var(--ss-accent);
-    font-weight: 600;
+    background: color-mix(in srgb, var(--ss-accent) 12%, transparent);
   }
 
-  .nk-tile {
+  .nk-nav-icon {
     display: grid;
     place-items: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 5px;
-    color: #fff;
+    width: 16px;
+    height: 16px;
+    color: #7a7a7c;
+  }
+
+  .nk-nav-item[data-on] .nk-nav-icon {
+    color: var(--ss-accent);
   }
 
   .nk-nav-label {
@@ -85,14 +96,13 @@
 
   .nk-nav-item[data-on] .nk-nav-figure {
     color: var(--ss-accent);
-    font-weight: 500;
   }
 
   /* ---- Content ---- */
 
   /* The app's content column is one gray, its bar included, with white cards */
   .nk-win .ss-window__main {
-    background: #f6f6f9;
+    background: #f6f5f8;
   }
 
   .nk-win .ss-window__bar {
@@ -108,13 +118,9 @@
     background: transparent;
   }
 
-  .nk-rescan .ss-icon,
-  .nk-rescan svg {
-    transition: rotate 0.7s cubic-bezier(0.45, 0, 0.1, 1);
-  }
-
   .nk-rescan[data-spin] svg {
     rotate: 360deg;
+    transition: rotate 0.7s cubic-bezier(0.45, 0, 0.1, 1);
   }
 
   .nk-card {
@@ -122,9 +128,9 @@
     flex-direction: column;
     gap: 16px;
     padding: 16px;
-    border-radius: 12px;
+    border-radius: 18px;
     background: var(--ss-surface);
-    box-shadow: var(--ss-shadow-card);
+    box-shadow: 0 0 0 0.5px var(--nk-sep), 0 1px 2px rgb(0 0 0 / 0.04);
   }
 
   .nk-summary {
@@ -141,8 +147,8 @@
     width: 40px;
     height: 40px;
     border-radius: 10px;
-    background: rgba(255, 159, 10, 0.16);
-    color: #ff9f0a;
+    background: color-mix(in srgb, var(--ss-accent) 12%, transparent);
+    color: var(--ss-accent);
   }
 
   .nk-figures {
@@ -195,7 +201,7 @@
     width: 4px;
     height: 4px;
     border-radius: 50%;
-    transition: background-color 0.35s ease;
+    transition: background-color 0.2s ease;
   }
 
   /* ---- Table ---- */
@@ -212,9 +218,13 @@
     gap: 10px;
     height: 36px;
     padding: 0 16px;
-    border-bottom: 1px solid var(--ss-line);
+    border-radius: 6px;
     font-size: 13px;
     line-height: 16px;
+  }
+
+  .nk-row:nth-child(even) {
+    background: rgb(0 0 0 / 0.022);
   }
 
   .nk-check {
@@ -254,7 +264,7 @@
     place-items: center;
     width: 20px;
     height: 20px;
-    border-radius: 5px;
+    border-radius: 4px;
   }
 
   .nk-row-text {
@@ -301,6 +311,15 @@
   & .ss-stage[data-layout='compact'] .nk-win {
     width: 326px;
     height: 480px;
+    mask-image: linear-gradient(to bottom, #000 300px, transparent 324px);
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-win .ss-window__lights {
+    display: none;
+  }
+
+  & .ss-stage[data-layout='compact'] .nk-win .ss-window__title[data-toolbar] {
+    margin-left: 0;
   }
 
   & .ss-stage[data-layout='compact'] .nk-body {
